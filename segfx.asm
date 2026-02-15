@@ -1052,10 +1052,10 @@ fx_wipe_ctr_in:
                 cp      DISP_COLS / 2
                 jr      nc,.done
                 ld      b,a
-                ld      a,(DISP_COLS / 2) - 1
+                ld      a,DISP_COLS / 2 - 1
                 sub     b
                 call    bright_col_ff
-                ld      a,(DISP_COLS / 2)
+                ld      a,DISP_COLS / 2
                 add     a,b
                 call    bright_col_ff
                 ld      hl,state.fx_pos
@@ -1282,10 +1282,10 @@ fx_wipe_ctr_out:
                 cp      DISP_COLS / 2
                 jr      nc,.done
                 ld      b,a
-                ld      a,(DISP_COLS / 2) - 1
+                ld      a,DISP_COLS / 2 - 1
                 sub     b
                 call    clear_col
-                ld      a,(DISP_COLS / 2)
+                ld      a,DISP_COLS / 2
                 add     a,b
                 call    clear_col
                 ld      hl,state.fx_pos
