@@ -2241,7 +2241,139 @@ example_stream:
                 db      "T13 DISSOLVE OUT        "
                 db      PAGE_END
 
-                ; End marker — hold on final screen
+                ; ========================================================
+                ; DISPLAY EFFECT TESTS
+                ; ========================================================
+                ; TRANS_NONE in/out so we isolate the display effect.
+                ; Longer dwells for effects that need time to be visible.
+
+                ; Test 14: DISP_FLASH
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_FLASH
+                db      TRANS_NONE
+                db      6               ; slow speed so flash is visible
+                db      01h, 2Ch        ; 300 ticks = 6 sec
+                db      "T14 FLASH               "
+                db      PAGE_END
+
+                ; Test 15: DISP_BREATHE
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_BREATHE
+                db      TRANS_NONE
+                db      2
+                db      01h, 2Ch        ; 300 ticks = 6 sec
+                db      "T15 BREATHE             "
+                db      PAGE_END
+
+                ; Test 16: DISP_SCROLL_L (long text)
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_SCROLL_L
+                db      TRANS_NONE
+                db      2
+                db      02h, 58h        ; 600 ticks = 12 sec
+                db      "T16 SCROLL LEFT --- THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG"
+                db      PAGE_END
+
+                ; Test 17: DISP_SCROLL_R (long text)
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_SCROLL_R
+                db      TRANS_NONE
+                db      2
+                db      02h, 58h        ; 600 ticks = 12 sec
+                db      "T17 SCROLL RIGHT --- 1234567890 ABDEFGHIJKLNOPQRTUV"
+                db      PAGE_END
+
+                ; Test 18: DISP_TYPEWRITER (centered with pause)
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_TYPEWRITER
+                db      TRANS_NONE
+                db      3
+                db      01h, 90h        ; 400 ticks = 8 sec
+                db      INL_ALIGN_C
+                db      "T18 TYPE"
+                db      INL_PAUSE, INL_PARAM_BASE + 10
+                db      "..."
+                db      PAGE_END
+
+                ; Test 19: DISP_TWRT_R (reverse typewriter)
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_TWRT_R
+                db      TRANS_NONE
+                db      3
+                db      01h, 90h        ; 400 ticks = 8 sec
+                db      INL_ALIGN_C
+                db      "T19 REVERSE TYPE        "
+                db      PAGE_END
+
+                ; Test 20: DISP_BOUNCE (long text)
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_BOUNCE
+                db      TRANS_NONE
+                db      2
+                db      02h, 58h        ; 600 ticks = 12 sec
+                db      "T20 BOUNCING BACK AND FORTH HERE"
+                db      PAGE_END
+
+                ; Test 21: DISP_FLASH_ALT
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_FLASH_ALT
+                db      TRANS_NONE
+                db      6
+                db      01h, 2Ch        ; 300 ticks = 6 sec
+                db      "T21 FLASH ALTERNATING   "
+                db      PAGE_END
+
+                ; Test 22: DISP_SPARKLE
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_SPARKLE
+                db      TRANS_NONE
+                db      2
+                db      01h, 90h        ; 400 ticks = 8 sec
+                db      "T22 SPARKLE             "
+                db      PAGE_END
+
+                ; Test 23: DISP_WAVE
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_WAVE
+                db      TRANS_NONE
+                db      2
+                db      01h, 90h        ; 400 ticks = 8 sec
+                db      "T23 BRIGHTNESS WAVE     "
+                db      PAGE_END
+
+                ; Test 24: DISP_MARQUEE_L (short text)
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_MARQUEE_L
+                db      TRANS_NONE
+                db      2
+                db      02h, 58h        ; 600 ticks = 12 sec
+                db      INL_ALIGN_C
+                db      "T24 LEFT"
+                db      PAGE_END
+
+                ; Test 25: DISP_MARQUEE_R (short text)
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_MARQUEE_R
+                db      TRANS_NONE
+                db      2
+                db      02h, 58h        ; 600 ticks = 12 sec
+                db      INL_ALIGN_C
+                db      "T25 RIGHT"
+                db      PAGE_END
+
+                ; End marker
                 db      PAGE_START
                 db      TRANS_NONE
                 db      DISP_STATIC
