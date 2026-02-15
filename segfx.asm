@@ -337,37 +337,37 @@ display_clear:
 ; ============================================================================
 ; SEGFX_OUTPUT — Write display buffers to hardware via BIOS
 ; ============================================================================
-; Interrupts are disabled during output to prevent the tick handler from
-; modifying buffers mid-write, which causes display glitches.
+; Uses explicit column counter (C) since BIOS calls may destroy A.
+; Interrupts disabled to prevent tick handler modifying buffers mid-write.
 ; ============================================================================
 segfx_output:
                 di
                 ; Pass 1: Segment patterns
                 ld      ix,disp_seg
-                xor     a
+                ld      c,0             ; C = column counter
                 ld      b,DISP_COLS
 .seg:           push    bc
-                push    af
+                ld      a,c             ; A = column
                 ld      l,(ix+0)
                 ld      h,(ix+1)
-                pop     af
-                call    BIOS_SEG
+                call    BIOS_SEG        ; A=column, HL=bitmask
                 inc     ix
                 inc     ix
                 pop     bc
+                inc     c
                 djnz    .seg
 
                 ; Pass 2: Brightness
-                ld      iy,disp_bright
-                xor     a
+                ld      ix,disp_bright
+                ld      c,0             ; C = column counter
                 ld      b,DISP_COLS
 .brt:           push    bc
-                push    af
-                ld      c,(iy+0)
-                pop     af
-                call    BIOS_BRT
-                inc     iy
+                ld      a,c             ; A = column
+                ld      c,(ix+0)        ; C = brightness value
+                call    BIOS_BRT        ; A=column, C=brightness
+                inc     ix
                 pop     bc
+                inc     c
                 djnz    .brt
                 ei
                 ret
@@ -399,7 +399,7 @@ segfx_tick:
                 jr      z,.no_pause
                 dec     a
                 ld      (state.pause_count),a
-                jr      .mark_dirty
+                jr      .done           ; pausing: no output needed
 .no_pause:
 
                 ; Decrement dwell counter every tick (not per step)
@@ -421,14 +421,14 @@ segfx_tick:
                 xor     a
                 ld      (state.fx_pos),a
                 ld      (state.fx_sub),a
-                jr      .mark_dirty
+                jr      .mark_dirty     ; state change → update display
 .no_dwell:
 
                 ; Step timer
                 ld      a,(state.step_timer)
                 dec     a
                 ld      (state.step_timer),a
-                jr      nz,.mark_dirty  ; not time for a step, but still dirty for flash
+                jr      nz,.done        ; not time for a step yet
 
                 ; Reload step timer (clamp speed >= 1)
                 ld      a,(state.speed)
@@ -459,8 +459,7 @@ segfx_tick:
                 call    set_full_bright
                 jr      .mark_dirty
 
-.display:       ; Dwell already handled above; just run display effect
-                call    fx_display_step
+.display:       call    fx_display_step
                 jr      .mark_dirty
 
 .exit:          call    fx_trans_exit_step
@@ -468,11 +467,11 @@ segfx_tick:
                 xor     a
                 ld      (state.page_state),a
                 call    display_clear
-                ; fall through to mark_dirty
+                ; fall through
 
 .mark_dirty:    ld      a,1
                 ld      (state.dirty),a
-                pop     iy
+.done:          pop     iy
                 pop     ix
                 pop     hl
                 pop     de
@@ -561,7 +560,10 @@ page_load:
                 ld      (state.page_state),a
                 ret
 
-.has_entry:     ld      a,1
+.has_entry:     ; Pre-render segments so transition only needs to adjust brightness.
+                ; display_clear already zeroed brightness, so all columns are dark.
+                call    render_full
+                ld      a,1
                 ld      (state.page_state),a
                 ret
 
@@ -961,7 +963,7 @@ fx_trans_step:
 
 ; --- FADE IN: 16 steps, brightness ≈ step × 17 ---
 fx_fade_in:
-                call    render_full
+;               call    render_full  ; removed: pre-rendered in page_load
                 ld      a,(state.fx_pos)
                 cp      16
                 jr      nc,.done
@@ -988,7 +990,7 @@ fx_fade_in:
 
 ; --- WIPE LEFT IN ---
 fx_wipe_l_in:
-                call    render_full
+;               call    render_full  ; removed: pre-rendered in page_load
                 ld      a,(state.fx_pos)
                 cp      DISP_COLS
                 jr      nc,.done
@@ -1002,7 +1004,7 @@ fx_wipe_l_in:
 
 ; --- WIPE RIGHT IN ---
 fx_wipe_r_in:
-                call    render_full
+;               call    render_full  ; removed: pre-rendered in page_load
                 ld      a,(state.fx_pos)
                 cp      DISP_COLS
                 jr      nc,.done
@@ -1019,7 +1021,7 @@ fx_wipe_r_in:
 
 ; --- WIPE CENTER IN ---
 fx_wipe_ctr_in:
-                call    render_full
+;               call    render_full  ; removed: pre-rendered in page_load
                 ld      a,(state.fx_pos)
                 cp      DISP_COLS / 2
                 jr      nc,.done
@@ -1039,7 +1041,7 @@ fx_wipe_ctr_in:
 
 ; --- WIPE EDGES IN ---
 fx_wipe_edge_in:
-                call    render_full
+;               call    render_full  ; removed: pre-rendered in page_load
                 ld      a,(state.fx_pos)
                 cp      DISP_COLS / 2
                 jr      nc,.done
@@ -1058,7 +1060,7 @@ fx_wipe_edge_in:
 
 ; --- DISSOLVE IN ---
 fx_dissolve_in:
-                call    render_full
+;               call    render_full  ; removed: pre-rendered in page_load
                 ld      a,(state.fx_pos)
                 cp      DISP_COLS
                 jr      nc,.done
@@ -1079,7 +1081,7 @@ fx_dissolve_in:
 ; --- FADE WIPE LEFT IN: wipe left with 3-column fade trail ---
 ; fx_pos tracks the leading edge. Columns behind it get partial brightness.
 fx_fade_wipe_l_in:
-                call    render_full
+;               call    render_full  ; removed: pre-rendered in page_load
                 ld      a,(state.fx_pos)
                 cp      DISP_COLS + 3   ; need 3 extra steps for trail to finish
                 jr      nc,.done
@@ -1121,7 +1123,7 @@ fx_fade_wipe_l_in:
 
 ; --- FADE WIPE RIGHT IN: wipe right with 3-column fade trail ---
 fx_fade_wipe_r_in:
-                call    render_full
+;               call    render_full  ; removed: pre-rendered in page_load
                 ld      a,(state.fx_pos)
                 cp      DISP_COLS + 3
                 jr      nc,.done
@@ -2101,94 +2103,152 @@ fx_dsp_wave:
 
 
 ; ============================================================================
-; EXAMPLE MESSAGE STREAM
+; TEST STREAM — Transition effects, one at a time
+; ============================================================================
+; Each page: DISP_STATIC, speed 2, dwell 150 ticks (3 sec).
+; Different text per page so we can identify which test we're on.
+; All strings padded to exactly 24 chars.
 ; ============================================================================
 example_stream:
-                ; Page 0: STATIC TEST — no effects, just render text
-                ; If this doesn't show all chars, rendering is broken
-                db      PAGE_START
-                db      TRANS_NONE      ; instant appear
-                db      DISP_STATIC     ; no animation
-                db      TRANS_NONE      ; instant disappear
-                db      1               ; speed (irrelevant for static)
-                db      01h, 0F4h       ; dwell: 500 ticks = 10 sec
-                db      "ABCDEFGHIJKLMNOPQRSTUVWX"
-                db      PAGE_END
 
-                ; Page 1: Title — fade in, breathe, fade out
-                db      PAGE_START
-                db      TRANS_FADE
-                db      DISP_BREATHE
-                db      TRANS_FADE
-                db      3
-                db      00h, 0FAh       ; 250 ticks = 5 sec
-                db      "  SPACE INVADERS 3D   "
-                db      PAGE_END
-
-                ; Page 2: Scrolling instructions
+                ; Test 1: TRANS_NONE in, TRANS_NONE out (baseline)
                 db      PAGE_START
                 db      TRANS_NONE
-                db      DISP_SCROLL_L
+                db      DISP_STATIC
                 db      TRANS_NONE
                 db      2
-                db      02h, 58h        ; 600 ticks = 12 sec
-                db      "ARROWS TO MOVE --- Z TO FIRE --- P TO PAUSE --- SURVIVE AS LONG AS YOU CAN!"
+                db      00h, 96h        ; 150 ticks = 3 sec
+                db      "T01 NONE IN  NONE OUT  !"
                 db      PAGE_END
 
-                ; Page 3: Marquee left
+                ; Test 2: TRANS_FADE in, TRANS_NONE out
                 db      PAGE_START
-                db      TRANS_NONE
-                db      DISP_MARQUEE_L
-                db      TRANS_NONE
-                db      2
-                db      02h, 58h        ; 600 ticks = 12 sec
-                db      "WAVE 1"
-                db      PAGE_END
-
-                ; Page 4: Typewriter reveal with pause
-                db      PAGE_START
-                db      TRANS_NONE
-                db      DISP_TYPEWRITER
                 db      TRANS_FADE
-                db      4
-                db      01h, 2Ch        ; 300 ticks = 6 sec
-                db      INL_ALIGN_C
-                db      "GET READY"
-                db      INL_PAUSE, INL_PARAM_BASE + 10
-                db      "..."
-                db      PAGE_END
-
-                ; Page 5: Sparkle effect with fade-wipe entry
-                db      PAGE_START
-                db      TRANS_FADE_WP_L
-                db      DISP_SPARKLE
-                db      TRANS_FADE_WP_R
+                db      DISP_STATIC
+                db      TRANS_NONE
                 db      2
-                db      01h, 0F4h       ; 500 ticks = 10 sec
-                db      INL_ALIGN_C
-                db      "HIGH SCORE  12500"
+                db      00h, 96h
+                db      "T02 FADE IN             "
                 db      PAGE_END
 
-                ; Page 6: Typewriter right
+                ; Test 3: TRANS_NONE in, TRANS_FADE out
                 db      PAGE_START
                 db      TRANS_NONE
-                db      DISP_TWRT_R
-                db      TRANS_WIPE_CTR
-                db      3
-                db      01h, 2Ch        ; 300 ticks = 6 sec
-                db      INL_ALIGN_C
-                db      "GAME OVER"
+                db      DISP_STATIC
+                db      TRANS_FADE
+                db      2
+                db      00h, 96h
+                db      "T03 FADE OUT            "
                 db      PAGE_END
 
-                ; Page 7: Flashing insert coin
+                ; Test 4: TRANS_WIPE_L in, TRANS_NONE out
+                db      PAGE_START
+                db      TRANS_WIPE_L
+                db      DISP_STATIC
+                db      TRANS_NONE
+                db      2
+                db      00h, 96h
+                db      "T04 LEFT IN             "
+                db      PAGE_END
+
+                ; Test 5: TRANS_NONE in, TRANS_WIPE_L out
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_STATIC
+                db      TRANS_WIPE_L
+                db      2
+                db      00h, 96h
+                db      "T05 LEFT OUT            "
+                db      PAGE_END
+
+                ; Test 6: TRANS_WIPE_R in, TRANS_NONE out
+                db      PAGE_START
+                db      TRANS_WIPE_R
+                db      DISP_STATIC
+                db      TRANS_NONE
+                db      2
+                db      00h, 96h
+                db      "T06 RIGHT IN            "
+                db      PAGE_END
+
+                ; Test 7: TRANS_NONE in, TRANS_WIPE_R out
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_STATIC
+                db      TRANS_WIPE_R
+                db      2
+                db      00h, 96h
+                db      "T07 RIGHT OUT           "
+                db      PAGE_END
+
+                ; Test 8: TRANS_WIPE_CTR in, TRANS_NONE out
                 db      PAGE_START
                 db      TRANS_WIPE_CTR
-                db      DISP_FLASH
+                db      DISP_STATIC
+                db      TRANS_NONE
+                db      2
+                db      00h, 96h
+                db      "T08 CENTRE IN           "
+                db      PAGE_END
+
+                ; Test 9: TRANS_NONE in, TRANS_WIPE_CTR out
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_STATIC
+                db      TRANS_WIPE_CTR
+                db      2
+                db      00h, 96h
+                db      "T09 CENTRE OUT          "
+                db      PAGE_END
+
+                ; Test 10: TRANS_WIPE_EDGE in, TRANS_NONE out
+                db      PAGE_START
                 db      TRANS_WIPE_EDGE
-                db      6
-                db      02h, 58h        ; 600 ticks = 12 sec
-                db      INL_ALIGN_C
-                db      "INSERT COIN"
+                db      DISP_STATIC
+                db      TRANS_NONE
+                db      2
+                db      00h, 96h
+                db      "T10 EDGE IN             "
+                db      PAGE_END
+
+                ; Test 11: TRANS_NONE in, TRANS_WIPE_EDGE out
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_STATIC
+                db      TRANS_WIPE_EDGE
+                db      2
+                db      00h, 96h
+                db      "T11 EDGE OUT            "
+                db      PAGE_END
+
+                ; Test 12: TRANS_DISSOLVE in, TRANS_NONE out
+                db      PAGE_START
+                db      TRANS_DISSOLVE
+                db      DISP_STATIC
+                db      TRANS_NONE
+                db      2
+                db      00h, 96h
+                db      "T12 DISSOLVE IN         "
+                db      PAGE_END
+
+                ; Test 13: TRANS_NONE in, TRANS_DISSOLVE out
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_STATIC
+                db      TRANS_DISSOLVE
+                db      2
+                db      00h, 96h
+                db      "T13 DISSOLVE OUT        "
+                db      PAGE_END
+
+                ; End marker — hold on final screen
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_STATIC
+                db      TRANS_NONE
+                db      1
+                db      27h, 10h        ; 10000 ticks ~ 200 sec
+                db      "---ALL TESTS DONE!------"
                 db      PAGE_END
 
                 db      END_STREAM
