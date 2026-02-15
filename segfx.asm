@@ -337,7 +337,11 @@ display_clear:
 ; ============================================================================
 ; SEGFX_OUTPUT — Write display buffers to hardware via BIOS
 ; ============================================================================
+; Interrupts are disabled during output to prevent the tick handler from
+; modifying buffers mid-write, which causes display glitches.
+; ============================================================================
 segfx_output:
+                di
                 ; Pass 1: Segment patterns
                 ld      ix,disp_seg
                 xor     a
@@ -365,6 +369,7 @@ segfx_output:
                 inc     iy
                 pop     bc
                 djnz    .brt
+                ei
                 ret
 
 
@@ -2099,6 +2104,17 @@ fx_dsp_wave:
 ; EXAMPLE MESSAGE STREAM
 ; ============================================================================
 example_stream:
+                ; Page 0: STATIC TEST — no effects, just render text
+                ; If this doesn't show all chars, rendering is broken
+                db      PAGE_START
+                db      TRANS_NONE      ; instant appear
+                db      DISP_STATIC     ; no animation
+                db      TRANS_NONE      ; instant disappear
+                db      1               ; speed (irrelevant for static)
+                db      01h, 0F4h       ; dwell: 500 ticks = 10 sec
+                db      "ABCDEFGHIJKLMNOPQRSTUVWX"
+                db      PAGE_END
+
                 ; Page 1: Title — fade in, breathe, fade out
                 db      PAGE_START
                 db      TRANS_FADE
