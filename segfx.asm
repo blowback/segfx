@@ -1614,34 +1614,44 @@ count_visible:
 fx_dsp_bounce:
                 ld      a,(state.text_len)
                 cp      DISP_COLS + 1
-                ret     c               ; fits on display
+                ret     c               ; fits on display, nothing to do
 
+                ; Render at current offset first
+                call    render_scrolled
+                call    set_all_bright
+
+                ; Then adjust offset for next step
                 ld      a,(state.bounce_dir)
                 or      a
                 jr      nz,.right
 
+                ; Moving left: increment offset
                 ld      a,(state.text_offset)
-                inc     a
-                ld      (state.text_offset),a
                 ld      b,a
                 ld      a,(state.text_len)
                 sub     DISP_COLS
                 cp      b
-                jr      nz,.render
-                ld      a,1
-                ld      (state.bounce_dir),a
-                jr      .render
+                jr      z,.flip_right   ; at end, reverse
+                ld      a,b
+                inc     a
+                ld      (state.text_offset),a
+                ret
 
-.right:         ld      a,(state.text_offset)
+.flip_right:    ld      a,1
+                ld      (state.bounce_dir),a
+                ret
+
+.right:         ; Moving right: decrement offset
+                ld      a,(state.text_offset)
+                or      a
+                jr      z,.flip_left    ; at start, reverse
                 dec     a
                 ld      (state.text_offset),a
-                or      a
-                jr      nz,.render
-                xor     a
-                ld      (state.bounce_dir),a
+                ret
 
-.render:        call    render_scrolled
-                jp      set_all_bright
+.flip_left:     xor     a
+                ld      (state.bounce_dir),a
+                ret
 
 
 ; --- FLASH ALTERNATING ---
@@ -1773,8 +1783,11 @@ fx_dsp_marquee_l:
                 inc     (hl)
                 ret
 
-.mql_gone:      ; Off screen — we're done. The dwell timer will expire naturally.
+.mql_gone:      ; Off screen — force dwell to expire so we move on immediately
                 call    display_clear
+                xor     a
+                ld      (state.tick_count),a
+                ld      (state.tick_count+1),a
                 ret
 
 ; Helper: render text starting at display column A (signed-ish, 0..23)
@@ -1953,6 +1966,9 @@ fx_dsp_marquee_r:
                 ret
 
 .mqr_gone:      call    display_clear
+                xor     a
+                ld      (state.tick_count),a
+                ld      (state.tick_count+1),a
                 ret
 
 
