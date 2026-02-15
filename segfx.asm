@@ -554,8 +554,27 @@ page_load:
                 ld      a,(state.fx_entry)
                 or      a
                 jr      nz,.has_entry
+
+                ; Check if display effect builds up from blank
+                ; (typewriter, typewriter_r, marquee_l, marquee_r)
+                ; These effects render their own content progressively.
+                ld      a,(state.fx_display)
+                cp      DISP_TYPEWRITER
+                jr      z,.blank_start
+                cp      DISP_TWRT_R
+                jr      z,.blank_start
+                cp      DISP_MARQUEE_L
+                jr      z,.blank_start
+                cp      DISP_MARQUEE_R
+                jr      z,.blank_start
+
                 call    render_full
                 call    set_full_bright
+                ld      a,2
+                ld      (state.page_state),a
+                ret
+
+.blank_start:   ; Start with blank display; effect will build content
                 ld      a,2
                 ld      (state.page_state),a
                 ret
@@ -2088,11 +2107,13 @@ fx_dsp_wave:
                 and     1Fh
                 push    hl
                 push    bc
+                push    de              ; save D = fx_pos offset
                 ld      e,a
                 ld      d,0
                 ld      hl,sine_table
                 add     hl,de
                 ld      a,(hl)
+                pop     de              ; restore D = fx_pos offset
                 pop     bc
                 pop     hl
                 ld      (hl),a
