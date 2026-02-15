@@ -388,11 +388,6 @@ segfx_tick:
                 push    ix
                 push    iy
 
-                ; Toggle flash phase
-                ld      a,(state.flash_phase)
-                xor     1
-                ld      (state.flash_phase),a
-
                 ; Handle inline pause countdown
                 ld      a,(state.pause_count)
                 or      a
@@ -436,6 +431,11 @@ segfx_tick:
                 jr      nz,.spd_ok
                 inc     a
 .spd_ok:        ld      (state.step_timer),a
+
+                ; Toggle flash phase (once per step, not per tick)
+                ld      a,(state.flash_phase)
+                xor     1
+                ld      (state.flash_phase),a
 
                 ; Dispatch on page_state
                 ld      a,(state.page_state)
@@ -880,11 +880,12 @@ render_scrolled:
 
                 ; Font lookup
                 call    font_lookup     ; HL = bitmask
-                pop     de              ; E = source index (don't need)
-                pop     bc              ; C = display column
+                pop     de              ; E = source index (don't need), D = wrap point
+                pop     bc              ; C = display column, B = loop counter
 
-                ; Store at disp_seg[C*2]
-                push    hl              ; bitmask
+                ; Store at disp_seg[C*2] — must preserve D (wrap point)
+                push    de              ; save D (wrap point)
+                push    hl              ; save bitmask
                 ld      a,c
                 add     a,a
                 ld      e,a
@@ -895,6 +896,7 @@ render_scrolled:
                 ld      (hl),e
                 inc     hl
                 ld      (hl),d
+                pop     de              ; restore D = wrap point
                 jr      .next
 
 .blank_pop:     pop     de
