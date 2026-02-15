@@ -11,6 +11,7 @@
 BIOS_SEG        equ     0FDD6h
 BIOS_BRT        equ     0FDD3h
 DISP_COLS       equ     24
+MAX_BRIGHT      equ     128             ; hardware ceiling — values above this are indistinguishable
 
 ; ============================================================================
 ; Protocol constants
@@ -357,14 +358,18 @@ segfx_output:
                 inc     c
                 djnz    .seg
 
-                ; Pass 2: Brightness
+                ; Pass 2: Brightness (scaled to MAX_BRIGHT)
                 ld      ix,disp_bright
                 ld      c,0             ; C = column counter
                 ld      b,DISP_COLS
 .brt:           push    bc
                 ld      a,c             ; A = column
-                ld      c,(ix+0)        ; C = brightness value
-                call    BIOS_BRT        ; A=column, C=brightness
+                ld      e,a             ; E = column
+                ld      a,(ix+0)        ; A = raw brightness 0..255
+                srl     a               ; A = brightness >> 1 (0..127) for MAX_BRIGHT=128
+                ld      c,a             ; C = scaled brightness
+                ld      a,e             ; A = column
+                call    BIOS_BRT
                 inc     ix
                 pop     bc
                 inc     c
