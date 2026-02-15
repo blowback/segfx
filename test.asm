@@ -8,7 +8,7 @@ BIOS_TICK	EQU	0xFDC7		; HL -> handler
 		LD	HL, segfx_tick
 		CALL	BIOS_TICK
 
-loop		HALT
+loop		CALL	segfx_update
 		JP	loop
 
 		DEFINE	SEGFX_RAM_BASE $

@@ -7,6 +7,7 @@
 ;           0xFDD3 = write brightness (C=level, A=column)
 ;           User event hook called at 50Hz
 ; ============================================================================
+
 BIOS_SEG        equ     0FDD6h
 BIOS_BRT        equ     0FDD3h
 DISP_COLS       equ     24
@@ -92,6 +93,7 @@ flash_phase     db      0               ; global flash toggle (0/1)
 marquee_state   db      0               ; 0=scrolling in, 1=holding, 2=scrolling out
 marquee_hold    dw      0               ; ticks remaining in marquee hold phase
 lfsr            db      0ACh            ; 8-bit LFSR for sparkle (non-zero seed)
+dirty           db      0               ; non-zero = display buffers need pushing to hw
                 ends
 
 
@@ -309,6 +311,8 @@ segfx_init:
                 ld      (state.marquee_hold+1),a
                 ld      a,0ACh
                 ld      (state.lfsr),a
+                xor     a
+                ld      (state.dirty),a
                 ld      a,0FFh
                 ld      (state.inl_bright),a
                 ld      a,1
@@ -365,7 +369,11 @@ segfx_output:
 
 
 ; ============================================================================
-; SEGFX_TICK — Main tick handler (called at 50Hz from BIOS user event)
+; SEGFX_TICK — Tick handler (called at 50Hz from BIOS interrupt)
+; ============================================================================
+; This ONLY updates state and display buffers. It does NOT call the BIOS
+; display routines. Call segfx_update from your main loop to push changes
+; to hardware.
 ; ============================================================================
 segfx_tick:
                 ; Toggle flash phase
@@ -379,13 +387,13 @@ segfx_tick:
                 jr      z,.no_pause
                 dec     a
                 ld      (state.pause_count),a
-                jp      segfx_output
+                jr      .mark_dirty
 .no_pause:
                 ; Step timer
                 ld      a,(state.step_timer)
                 dec     a
                 ld      (state.step_timer),a
-                jp      nz,segfx_output
+                jr      nz,.mark_dirty
 
                 ; Reload step timer (clamp speed >= 1)
                 ld      a,(state.speed)
@@ -405,16 +413,16 @@ segfx_tick:
                 jr      .exit
 
 .idle:          call    page_load
-                jp      segfx_output
+                jr      .mark_dirty
 
 .entry:         call    fx_trans_step
-                jp      nc,segfx_output ; CF clear = still running
+                jr      nc,.mark_dirty  ; CF clear = still running
                 ; Entry complete → display
                 ld      a,2
                 ld      (state.page_state),a
                 call    render_full
                 call    set_full_bright
-                jp      segfx_output
+                jr      .mark_dirty
 
 .display:       ld      hl,(state.tick_count)
                 dec     hl
@@ -423,20 +431,39 @@ segfx_tick:
                 or      l
                 jr      z,.dwell_end
                 call    fx_display_step
-                jp      segfx_output
+                jr      .mark_dirty
 .dwell_end:     ld      a,3
                 ld      (state.page_state),a
                 xor     a
                 ld      (state.fx_pos),a
                 ld      (state.fx_sub),a
-                jp      segfx_output
+                jr      .mark_dirty
 
 .exit:          call    fx_trans_exit_step
-                jp      nc,segfx_output
+                jr      nc,.mark_dirty
                 xor     a
                 ld      (state.page_state),a
                 call    display_clear
-                jp      segfx_output
+                ; fall through to mark_dirty
+
+.mark_dirty:    ld      a,1
+                ld      (state.dirty),a
+                ret
+
+
+; ============================================================================
+; SEGFX_UPDATE — Call from main loop to push display buffers to hardware
+; ============================================================================
+; Checks the dirty flag. If set, calls segfx_output and clears the flag.
+; Safe to call as often as you like; it's a no-op when nothing changed.
+; ============================================================================
+segfx_update:
+                ld      a,(state.dirty)
+                or      a
+                ret     z               ; nothing to do
+                xor     a
+                ld      (state.dirty),a
+                jp      segfx_output    ; tail call
 
 
 ; ============================================================================
