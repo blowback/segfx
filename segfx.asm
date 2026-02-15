@@ -2125,256 +2125,32 @@ fx_dsp_wave:
                 ret
 
 
+
 ; ============================================================================
-; TEST STREAM — Transition effects, one at a time
-; ============================================================================
-; Each page: DISP_STATIC, speed 2, dwell 150 ticks (3 sec).
-; Different text per page so we can identify which test we're on.
-; All strings padded to exactly 24 chars.
+; DEMO MESSAGE STREAM
 ; ============================================================================
 example_stream:
-
-                ; Test 1: TRANS_NONE in, TRANS_NONE out (baseline)
-                db      PAGE_START
-                db      TRANS_NONE
-                db      DISP_STATIC
-                db      TRANS_NONE
-                db      2
-                db      00h, 96h        ; 150 ticks = 3 sec
-                db      "T01 NONE IN  NONE OUT  !"
-                db      PAGE_END
-
-                ; Test 2: TRANS_FADE in, TRANS_NONE out
+                ; Page 1: Title — fade in, breathe, fade out
                 db      PAGE_START
                 db      TRANS_FADE
-                db      DISP_STATIC
-                db      TRANS_NONE
-                db      2
-                db      00h, 96h
-                db      "T02 FADE IN             "
-                db      PAGE_END
-
-                ; Test 3: TRANS_NONE in, TRANS_FADE out
-                db      PAGE_START
-                db      TRANS_NONE
-                db      DISP_STATIC
-                db      TRANS_FADE
-                db      2
-                db      00h, 96h
-                db      "T03 FADE OUT            "
-                db      PAGE_END
-
-                ; Test 4: TRANS_WIPE_L in, TRANS_NONE out
-                db      PAGE_START
-                db      TRANS_WIPE_L
-                db      DISP_STATIC
-                db      TRANS_NONE
-                db      2
-                db      00h, 96h
-                db      "T04 LEFT IN             "
-                db      PAGE_END
-
-                ; Test 5: TRANS_NONE in, TRANS_WIPE_L out
-                db      PAGE_START
-                db      TRANS_NONE
-                db      DISP_STATIC
-                db      TRANS_WIPE_L
-                db      2
-                db      00h, 96h
-                db      "T05 LEFT OUT            "
-                db      PAGE_END
-
-                ; Test 6: TRANS_WIPE_R in, TRANS_NONE out
-                db      PAGE_START
-                db      TRANS_WIPE_R
-                db      DISP_STATIC
-                db      TRANS_NONE
-                db      2
-                db      00h, 96h
-                db      "T06 RIGHT IN            "
-                db      PAGE_END
-
-                ; Test 7: TRANS_NONE in, TRANS_WIPE_R out
-                db      PAGE_START
-                db      TRANS_NONE
-                db      DISP_STATIC
-                db      TRANS_WIPE_R
-                db      2
-                db      00h, 96h
-                db      "T07 RIGHT OUT           "
-                db      PAGE_END
-
-                ; Test 8: TRANS_WIPE_CTR in, TRANS_NONE out
-                db      PAGE_START
-                db      TRANS_WIPE_CTR
-                db      DISP_STATIC
-                db      TRANS_NONE
-                db      2
-                db      00h, 96h
-                db      "T08 CENTRE IN           "
-                db      PAGE_END
-
-                ; Test 9: TRANS_NONE in, TRANS_WIPE_CTR out
-                db      PAGE_START
-                db      TRANS_NONE
-                db      DISP_STATIC
-                db      TRANS_WIPE_CTR
-                db      2
-                db      00h, 96h
-                db      "T09 CENTRE OUT          "
-                db      PAGE_END
-
-                ; Test 10: TRANS_WIPE_EDGE in, TRANS_NONE out
-                db      PAGE_START
-                db      TRANS_WIPE_EDGE
-                db      DISP_STATIC
-                db      TRANS_NONE
-                db      2
-                db      00h, 96h
-                db      "T10 EDGE IN             "
-                db      PAGE_END
-
-                ; Test 11: TRANS_NONE in, TRANS_WIPE_EDGE out
-                db      PAGE_START
-                db      TRANS_NONE
-                db      DISP_STATIC
-                db      TRANS_WIPE_EDGE
-                db      2
-                db      00h, 96h
-                db      "T11 EDGE OUT            "
-                db      PAGE_END
-
-                ; Test 12: TRANS_DISSOLVE in, TRANS_NONE out
-                db      PAGE_START
-                db      TRANS_DISSOLVE
-                db      DISP_STATIC
-                db      TRANS_NONE
-                db      2
-                db      00h, 96h
-                db      "T12 DISSOLVE IN         "
-                db      PAGE_END
-
-                ; Test 13: TRANS_NONE in, TRANS_DISSOLVE out
-                db      PAGE_START
-                db      TRANS_NONE
-                db      DISP_STATIC
-                db      TRANS_DISSOLVE
-                db      2
-                db      00h, 96h
-                db      "T13 DISSOLVE OUT        "
-                db      PAGE_END
-
-                ; ========================================================
-                ; DISPLAY EFFECT TESTS
-                ; ========================================================
-                ; TRANS_NONE in/out so we isolate the display effect.
-                ; Longer dwells for effects that need time to be visible.
-
-                ; Test 14: DISP_FLASH
-                db      PAGE_START
-                db      TRANS_NONE
-                db      DISP_FLASH
-                db      TRANS_NONE
-                db      6               ; slow speed so flash is visible
-                db      01h, 2Ch        ; 300 ticks = 6 sec
-                db      "T14 FLASH               "
-                db      PAGE_END
-
-                ; Test 15: DISP_BREATHE
-                db      PAGE_START
-                db      TRANS_NONE
                 db      DISP_BREATHE
-                db      TRANS_NONE
+                db      TRANS_FADE
                 db      2
                 db      01h, 2Ch        ; 300 ticks = 6 sec
-                db      "T15 BREATHE             "
+                db      "  SPACE INVADERS 3D   "
                 db      PAGE_END
 
-                ; Test 16: DISP_SCROLL_L (long text)
+                ; Page 2: Scrolling instructions
                 db      PAGE_START
                 db      TRANS_NONE
                 db      DISP_SCROLL_L
                 db      TRANS_NONE
                 db      2
                 db      02h, 58h        ; 600 ticks = 12 sec
-                db      "T16 SCROLL LEFT --- THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG"
+                db      "ARROWS TO MOVE --- Z TO FIRE --- P TO PAUSE --- SURVIVE AS LONG AS YOU CAN!"
                 db      PAGE_END
 
-                ; Test 17: DISP_SCROLL_R (long text)
-                db      PAGE_START
-                db      TRANS_NONE
-                db      DISP_SCROLL_R
-                db      TRANS_NONE
-                db      2
-                db      02h, 58h        ; 600 ticks = 12 sec
-                db      "T17 SCROLL RIGHT --- 1234567890 ABDEFGHIJKLNOPQRTUV"
-                db      PAGE_END
-
-                ; Test 18: DISP_TYPEWRITER (centered with pause)
-                db      PAGE_START
-                db      TRANS_NONE
-                db      DISP_TYPEWRITER
-                db      TRANS_NONE
-                db      3
-                db      01h, 90h        ; 400 ticks = 8 sec
-                db      INL_ALIGN_C
-                db      "T18 TYPE"
-                db      INL_PAUSE, INL_PARAM_BASE + 10
-                db      "..."
-                db      PAGE_END
-
-                ; Test 19: DISP_TWRT_R (reverse typewriter)
-                db      PAGE_START
-                db      TRANS_NONE
-                db      DISP_TWRT_R
-                db      TRANS_NONE
-                db      3
-                db      01h, 90h        ; 400 ticks = 8 sec
-                db      INL_ALIGN_C
-                db      "T19 REVERSE TYPE        "
-                db      PAGE_END
-
-                ; Test 20: DISP_BOUNCE (long text)
-                db      PAGE_START
-                db      TRANS_NONE
-                db      DISP_BOUNCE
-                db      TRANS_NONE
-                db      2
-                db      02h, 58h        ; 600 ticks = 12 sec
-                db      "T20 BOUNCING BACK AND FORTH HERE"
-                db      PAGE_END
-
-                ; Test 21: DISP_FLASH_ALT
-                db      PAGE_START
-                db      TRANS_NONE
-                db      DISP_FLASH_ALT
-                db      TRANS_NONE
-                db      6
-                db      01h, 2Ch        ; 300 ticks = 6 sec
-                db      "T21 FLASH ALTERNATING   "
-                db      PAGE_END
-
-                ; Test 22: DISP_SPARKLE
-                db      PAGE_START
-                db      TRANS_NONE
-                db      DISP_SPARKLE
-                db      TRANS_NONE
-                db      2
-                db      01h, 90h        ; 400 ticks = 8 sec
-                db      "T22 SPARKLE             "
-                db      PAGE_END
-
-                ; Test 23: DISP_WAVE
-                db      PAGE_START
-                db      TRANS_NONE
-                db      DISP_WAVE
-                db      TRANS_NONE
-                db      2
-                db      01h, 90h        ; 400 ticks = 8 sec
-                db      "T23 BRIGHTNESS WAVE     "
-                db      PAGE_END
-
-                ; Test 24: DISP_MARQUEE_L (short text)
+                ; Page 3: Marquee left
                 db      PAGE_START
                 db      TRANS_NONE
                 db      DISP_MARQUEE_L
@@ -2382,28 +2158,73 @@ example_stream:
                 db      2
                 db      02h, 58h        ; 600 ticks = 12 sec
                 db      INL_ALIGN_C
-                db      "T24 LEFT"
+                db      "WAVE 1"
                 db      PAGE_END
 
-                ; Test 25: DISP_MARQUEE_R (short text)
+                ; Page 4: Typewriter reveal with pause
                 db      PAGE_START
                 db      TRANS_NONE
-                db      DISP_MARQUEE_R
-                db      TRANS_NONE
+                db      DISP_TYPEWRITER
+                db      TRANS_FADE
+                db      4
+                db      01h, 2Ch        ; 300 ticks = 6 sec
+                db      INL_ALIGN_C
+                db      "GET READY"
+                db      INL_PAUSE, INL_PARAM_BASE + 10
+                db      "..."
+                db      PAGE_END
+
+                ; Page 5: Sparkle with fade-wipe transitions
+                db      PAGE_START
+                db      TRANS_FADE_WP_L
+                db      DISP_SPARKLE
+                db      TRANS_FADE_WP_R
                 db      2
+                db      01h, 0F4h       ; 500 ticks = 10 sec
+                db      INL_ALIGN_C
+                db      "HIGH SCORE  12500"
+                db      PAGE_END
+
+                ; Page 6: Wave effect
+                db      PAGE_START
+                db      TRANS_WIPE_CTR
+                db      DISP_WAVE
+                db      TRANS_DISSOLVE
+                db      2
+                db      01h, 2Ch        ; 300 ticks = 6 sec
+                db      "    ROUND COMPLETE!     "
+                db      PAGE_END
+
+                ; Page 7: Reverse typewriter
+                db      PAGE_START
+                db      TRANS_NONE
+                db      DISP_TWRT_R
+                db      TRANS_WIPE_EDGE
+                db      3
+                db      01h, 2Ch        ; 300 ticks = 6 sec
+                db      INL_ALIGN_C
+                db      "GAME OVER"
+                db      PAGE_END
+
+                ; Page 8: Bouncing credits
+                db      PAGE_START
+                db      TRANS_WIPE_L
+                db      DISP_BOUNCE
+                db      TRANS_WIPE_R
+                db      2
+                db      03h, 0E8h       ; 1000 ticks = 20 sec
+                db      "PROGRAMMED BY TEAM ALPHA --- 2026"
+                db      PAGE_END
+
+                ; Page 9: Flashing insert coin
+                db      PAGE_START
+                db      TRANS_WIPE_CTR
+                db      DISP_FLASH
+                db      TRANS_WIPE_EDGE
+                db      6
                 db      02h, 58h        ; 600 ticks = 12 sec
                 db      INL_ALIGN_C
-                db      "T25 RIGHT"
-                db      PAGE_END
-
-                ; End marker
-                db      PAGE_START
-                db      TRANS_NONE
-                db      DISP_STATIC
-                db      TRANS_NONE
-                db      1
-                db      27h, 10h        ; 10000 ticks ~ 200 sec
-                db      "---ALL TESTS DONE!------"
+                db      "INSERT COIN"
                 db      PAGE_END
 
                 db      END_STREAM
