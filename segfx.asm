@@ -376,6 +376,13 @@ segfx_output:
 ; to hardware.
 ; ============================================================================
 segfx_tick:
+                push    af
+                push    bc
+                push    de
+                push    hl
+                push    ix
+                push    iy
+
                 ; Toggle flash phase
                 ld      a,(state.flash_phase)
                 xor     1
@@ -389,11 +396,34 @@ segfx_tick:
                 ld      (state.pause_count),a
                 jr      .mark_dirty
 .no_pause:
+
+                ; Decrement dwell counter every tick (not per step)
+                ; Only in display state (page_state == 2)
+                ld      a,(state.page_state)
+                cp      2
+                jr      nz,.no_dwell
+                ld      hl,(state.tick_count)
+                ld      a,h
+                or      l
+                jr      z,.dwell_expired
+                dec     hl
+                ld      (state.tick_count),hl
+                jr      .no_dwell
+.dwell_expired:
+                ; Dwell done — move to exit phase
+                ld      a,3
+                ld      (state.page_state),a
+                xor     a
+                ld      (state.fx_pos),a
+                ld      (state.fx_sub),a
+                jr      .mark_dirty
+.no_dwell:
+
                 ; Step timer
                 ld      a,(state.step_timer)
                 dec     a
                 ld      (state.step_timer),a
-                jr      nz,.mark_dirty
+                jr      nz,.mark_dirty  ; not time for a step, but still dirty for flash
 
                 ; Reload step timer (clamp speed >= 1)
                 ld      a,(state.speed)
@@ -409,7 +439,7 @@ segfx_tick:
                 cp      1
                 jr      z,.entry
                 cp      2
-                jp      z,.display
+                jr      z,.display
                 jr      .exit
 
 .idle:          call    page_load
@@ -424,19 +454,8 @@ segfx_tick:
                 call    set_full_bright
                 jr      .mark_dirty
 
-.display:       ld      hl,(state.tick_count)
-                dec     hl
-                ld      (state.tick_count),hl
-                ld      a,h
-                or      l
-                jr      z,.dwell_end
+.display:       ; Dwell already handled above; just run display effect
                 call    fx_display_step
-                jr      .mark_dirty
-.dwell_end:     ld      a,3
-                ld      (state.page_state),a
-                xor     a
-                ld      (state.fx_pos),a
-                ld      (state.fx_sub),a
                 jr      .mark_dirty
 
 .exit:          call    fx_trans_exit_step
@@ -448,6 +467,12 @@ segfx_tick:
 
 .mark_dirty:    ld      a,1
                 ld      (state.dirty),a
+                pop     iy
+                pop     ix
+                pop     hl
+                pop     de
+                pop     bc
+                pop     af
                 ret
 
 
