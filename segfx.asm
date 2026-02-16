@@ -100,6 +100,8 @@ marquee_hold    dw      0               ; ticks remaining in marquee hold phase
 lfsr            db      0ACh            ; 8-bit LFSR for sparkle (non-zero seed)
 dirty           db      0               ; non-zero = display buffers need pushing to hw
 wave_tbl        db      0               ; wave table index (0=sine, 1=glint, ...)
+page_index      db      0               ; current page number (0-based)
+callback        dw      0               ; user callback address (0 = disabled)
                 ends
 
 
@@ -379,6 +381,9 @@ segfx_init:
                 ld      (state.lfsr),a
                 xor     a
                 ld      (state.dirty),a
+                ld      (state.page_index),a
+                ld      (state.callback),a
+                ld      (state.callback+1),a
                 ld      a,0FFh
                 ld      (state.inl_bright),a
                 ld      a,1
@@ -577,7 +582,14 @@ segfx_tick:
 
 .exit:          call    fx_trans_exit_step
                 jr      nc,.mark_dirty
-                xor     a
+                ; Exit complete — fire callback before loading next page
+                call    segfx_callback
+                ; If callback returned A != 0, skip next page
+                or      a
+                jr      z,.exit_done
+                ; Skip: advance stream past next PAGE_END
+                call    skip_page
+.exit_done:     xor     a
                 ld      (state.page_state),a
                 call    display_clear
                 ; fall through
@@ -609,6 +621,58 @@ segfx_update:
 
 
 ; ============================================================================
+; SEGFX_SET_CALLBACK — Register a user callback
+; ============================================================================
+; Input: HL = callback address (0 to disable)
+; Callback contract:
+;   Called after each page's exit transition completes.
+;   Input:  A = page index (1-based: page 1 just finished)
+;   Output: A = 0 to continue normally
+;           A != 0 to skip the next page
+;   May clobber: AF, BC, DE, HL (engine preserves IX/IY)
+; ============================================================================
+segfx_set_callback:
+                ld      (state.callback),hl
+                ret
+
+
+; ============================================================================
+; SEGFX_CALLBACK (internal) — Fire user callback if registered
+; ============================================================================
+; Returns: A = callback result (0 = continue, nonzero = skip next page)
+; ============================================================================
+segfx_callback:
+                ld      hl,(state.callback)
+                ld      a,h
+                or      l
+                ret     z               ; no callback — A=0 (continue)
+                ; Call user function with A = page_index
+                ld      a,(state.page_index)
+                jp      (hl)            ; tail call — user routine returns to our caller
+
+
+; ============================================================================
+; SKIP_PAGE (internal) — Advance stream_ptr past the next page
+; ============================================================================
+; Scans forward for PAGE_END or END_STREAM. If END_STREAM, wraps.
+; ============================================================================
+skip_page:
+                ld      hl,(state.stream_ptr)
+.sk_lp:         ld      a,(hl)
+                cp      END_STREAM
+                jr      z,.sk_wrap
+                inc     hl
+                cp      PAGE_END
+                jr      nz,.sk_lp
+                ; HL now points past PAGE_END
+                ld      (state.stream_ptr),hl
+                ret
+.sk_wrap:       ld      hl,(state.stream_base)
+                ld      (state.stream_ptr),hl
+                ret
+
+
+; ============================================================================
 ; PAGE_LOAD — Parse page header and decode content
 ; ============================================================================
 page_load:
@@ -623,9 +687,16 @@ page_load:
                 jr      .find
 
 .wrap:          ld      hl,(state.stream_base)
+                xor     a
+                ld      (state.page_index),a
                 jr      .find
 
-.found:         inc     hl              ; skip PAGE_START
+.found:         ; Increment page index
+                ld      a,(state.page_index)
+                inc     a
+                ld      (state.page_index),a
+
+                inc     hl              ; skip PAGE_START
                 ld      a,(hl)
                 ld      (state.fx_entry),a
                 inc     hl
