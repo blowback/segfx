@@ -32,6 +32,8 @@ TRANS_WIPE_EDGE equ     06h
 TRANS_DISSOLVE  equ     07h
 TRANS_FADE_WP_L equ     08h
 TRANS_FADE_WP_R equ     09h
+TRANS_VFADE_D   equ     0Ah             ; vertical fade down (top row disappears first) — OUT
+TRANS_VFADE_U   equ     0Bh             ; vertical fade up (bottom row disappears first) — OUT
 
 ; Display/hold effects
 DISP_STATIC     equ     00h
@@ -119,12 +121,35 @@ disp_flash      ds      DISP_COLS       ; 24 bytes: per-column flash flag (0=sol
 ; Text workspace
 text_buf        ds      256             ; decoded ASCII text
 attr_bright     ds      256             ; per-char brightness
-attr_flags      ds      256             ; per-char flags (bit 0=flash, bit 7=pause)
+attr_flags      ds      256             ; per-char flags (bit 0=flash, bit 6=speed, bit 7=pause)
+
+; Shadow buffer for segment-masking transitions (vfade in)
+shadow_seg      ds      DISP_COLS * 2   ; 48 bytes: copy of pre-rendered segments
 
 
 ; ============================================================================
 ; ROM data
 ; ============================================================================
+
+; Vertical segment row masks (top to bottom, 5 rows)
+; Row 0 (top):    a1,a2        = 0x0001
+; Row 1 (upper):  f,g1,g2,b   = 0x0722
+; Row 2 (middle): e,d2         = 0x00C0  (wait, let me recalculate)
+; Actually using the user's exact values:
+; Row 0 (top):    1                          = 0x0001
+; Row 1:          32,256,512,1024,2           = 0x0722
+; Row 2 (middle): 64,128                     = 0x00C0
+; Row 3:          16,8192,4096,2048,4         = 0x3814
+; Row 4 (bottom): 8,16384                    = 0x4008
+;
+; For OUT (mask off): AND with NOT(mask) at each step
+; For IN (mask on):   start blank, OR in mask at each step
+vfade_row_masks:
+                dw      0001h           ; row 0 (top)
+                dw      0722h           ; row 1
+                dw      00C0h           ; row 2 (middle)
+                dw      3814h           ; row 3
+                dw      4008h           ; row 4 (bottom)
 
 ; Dissolve order: pseudo-random column reveal sequence
 dissolve_order:
@@ -668,7 +693,31 @@ page_load:
 .has_entry:     ; Pre-render segments so transition only needs to adjust brightness.
                 ; display_clear already zeroed brightness, so all columns are dark.
                 call    render_full
-                ld      a,1
+
+                ; For vfade IN transitions, save segments to shadow and clear disp_seg
+                ld      a,(state.fx_entry)
+                cp      TRANS_VFADE_D
+                jr      z,.save_shadow
+                cp      TRANS_VFADE_U
+                jr      z,.save_shadow
+                jr      .no_shadow
+
+.save_shadow:   ; Copy disp_seg → shadow_seg
+                ld      hl,disp_seg
+                ld      de,shadow_seg
+                ld      bc,DISP_COLS * 2
+                ldir
+                ; Clear disp_seg (start with blank segments)
+                ld      hl,disp_seg
+                ld      b,DISP_COLS * 2
+                xor     a
+.shclr:         ld      (hl),a
+                inc     hl
+                djnz    .shclr
+                ; Set full brightness so segments are visible as they're revealed
+                call    set_full_bright
+
+.no_shadow:     ld      a,1
                 ld      (state.page_state),a
                 ret
 
@@ -1111,6 +1160,10 @@ fx_trans_step:
                 jp      z,fx_fade_wipe_l_in
                 cp      TRANS_FADE_WP_R
                 jp      z,fx_fade_wipe_r_in
+                cp      TRANS_VFADE_D
+                jp      z,fx_vfade_d_in
+                cp      TRANS_VFADE_U
+                jp      z,fx_vfade_u_in
                 scf                     ; unknown → done
                 ret
 
@@ -1341,6 +1394,10 @@ fx_trans_exit_step:
                 jp      z,fx_fade_wipe_l_out
                 cp      TRANS_FADE_WP_R
                 jp      z,fx_fade_wipe_r_out
+                cp      TRANS_VFADE_D
+                jp      z,fx_vfade_d_out
+                cp      TRANS_VFADE_U
+                jp      z,fx_vfade_u_out
                 scf
                 ret
 
@@ -1534,6 +1591,181 @@ fx_fade_wipe_r_out:
 .bright:        ld      (hl),0FFh
 .next:          inc     hl
                 inc     c
+                djnz    .lp
+                ld      hl,state.fx_pos
+                inc     (hl)
+                or      a
+                ret
+.done:          scf
+                ret
+
+
+; --- VERTICAL FADE DOWN IN: reveal rows top-to-bottom ---
+; Each step adds a row. Reads from shadow_seg, writes masked result to disp_seg.
+fx_vfade_d_in:
+                ld      a,(state.fx_pos)
+                cp      5
+                jr      nc,.done
+                ; Build cumulative mask: OR rows 0..fx_pos
+                ld      c,a
+                inc     c               ; C = number of rows to include (1..5)
+                ld      hl,vfade_row_masks
+                ld      de,0            ; DE = cumulative mask
+.cmask:         ld      a,e
+                or      (hl)
+                ld      e,a
+                inc     hl
+                ld      a,d
+                or      (hl)
+                ld      d,a
+                inc     hl
+                dec     c
+                jr      nz,.cmask
+                ; DE = cumulative mask. Apply: disp_seg[i] = shadow_seg[i] AND mask
+                ld      hl,shadow_seg
+                ld      ix,disp_seg
+                ld      b,DISP_COLS
+.lp:            ld      a,(hl)
+                and     e
+                ld      (ix+0),a
+                inc     hl
+                ld      a,(hl)
+                and     d
+                ld      (ix+1),a
+                inc     hl
+                inc     ix
+                inc     ix
+                djnz    .lp
+                ld      hl,state.fx_pos
+                inc     (hl)
+                or      a
+                ret
+.done:          scf
+                ret
+
+; --- VERTICAL FADE UP IN: reveal rows bottom-to-top ---
+fx_vfade_u_in:
+                ld      a,(state.fx_pos)
+                cp      5
+                jr      nc,.done
+                ; Build cumulative mask: OR rows 4, 3, 2... (4-fx_pos rows from bottom)
+                ld      c,a
+                inc     c               ; C = number of rows to include
+                ; Start row index = 4 - fx_pos
+                ld      b,a
+                ld      a,4
+                sub     b               ; A = start row index
+                ; Point HL to vfade_row_masks[start_row]
+                add     a,a             ; ×2
+                ld      e,a
+                ld      d,0
+                ld      hl,vfade_row_masks
+                add     hl,de
+                ; Now OR C consecutive rows going forward
+                ld      de,0
+.cmask:         ld      a,e
+                or      (hl)
+                ld      e,a
+                inc     hl
+                ld      a,d
+                or      (hl)
+                ld      d,a
+                inc     hl
+                dec     c
+                jr      nz,.cmask
+                ; Apply
+                ld      hl,shadow_seg
+                ld      ix,disp_seg
+                ld      b,DISP_COLS
+.lp:            ld      a,(hl)
+                and     e
+                ld      (ix+0),a
+                inc     hl
+                ld      a,(hl)
+                and     d
+                ld      (ix+1),a
+                inc     hl
+                inc     ix
+                inc     ix
+                djnz    .lp
+                ld      hl,state.fx_pos
+                inc     (hl)
+                or      a
+                ret
+.done:          scf
+                ret
+
+; --- VERTICAL FADE DOWN OUT: clear rows top-to-bottom ---
+fx_vfade_d_out:
+                ld      a,(state.fx_pos)
+                cp      5
+                jr      nc,.done
+                ; Get inverse mask for row fx_pos (top-down: 0,1,2,3,4)
+                ld      e,a
+                ld      d,0
+                ld      hl,vfade_row_masks
+                add     hl,de
+                add     hl,de
+                ld      e,(hl)
+                inc     hl
+                ld      d,(hl)
+                ; Invert: AND mask = NOT(row mask)
+                ld      a,e
+                cpl
+                ld      e,a
+                ld      a,d
+                cpl
+                ld      d,a             ; DE = ~row_mask
+                ld      hl,disp_seg
+                ld      b,DISP_COLS
+.lp:            ld      a,(hl)
+                and     e
+                ld      (hl),a
+                inc     hl
+                ld      a,(hl)
+                and     d
+                ld      (hl),a
+                inc     hl
+                djnz    .lp
+                ld      hl,state.fx_pos
+                inc     (hl)
+                or      a
+                ret
+.done:          scf
+                ret
+
+; --- VERTICAL FADE UP OUT: clear rows bottom-to-top ---
+fx_vfade_u_out:
+                ld      a,(state.fx_pos)
+                cp      5
+                jr      nc,.done
+                ld      b,a
+                ld      a,4
+                sub     b               ; A = 4-fx_pos
+                ld      e,a
+                ld      d,0
+                ld      hl,vfade_row_masks
+                add     hl,de
+                add     hl,de
+                ld      e,(hl)
+                inc     hl
+                ld      d,(hl)
+                ld      a,e
+                cpl
+                ld      e,a
+                ld      a,d
+                cpl
+                ld      d,a
+                ld      hl,disp_seg
+                ld      b,DISP_COLS
+.lp:            ld      a,(hl)
+                and     e
+                ld      (hl),a
+                inc     hl
+                ld      a,(hl)
+                and     d
+                ld      (hl),a
+                inc     hl
                 djnz    .lp
                 ld      hl,state.fx_pos
                 inc     (hl)
@@ -2416,9 +2648,9 @@ example_stream:
                 db      "..."
                 db      PAGE_END
 
-                ; Page 5: Sparkle with fade-wipe transitions
+                ; Page 5: Sparkle with vfade-up in, fade-wipe out
                 db      PAGE_START
-                db      TRANS_FADE_WP_L
+                db      TRANS_VFADE_U
                 db      DISP_SPARKLE
                 db      TRANS_FADE_WP_R
                 db      2
@@ -2427,11 +2659,11 @@ example_stream:
                 db      "HIGH SCORE  12500"
                 db      PAGE_END
 
-                ; Page 6: Wave effect
+                ; Page 6: Wave effect with vfade-down in, vfade-up out
                 db      PAGE_START
-                db      TRANS_WIPE_CTR
+                db      TRANS_VFADE_D
                 db      DISP_WAVE
-                db      TRANS_DISSOLVE
+                db      TRANS_VFADE_U
                 db      2
                 db      01h, 2Ch        ; 300 ticks = 6 sec
                 db      "    ROUND COMPLETE!     "
