@@ -146,11 +146,11 @@ The vertical fade transitions operate on 5 horizontal rows of segments:
 
 | Row | Position | Bitmask |
 |-----|----------|---------|
-| 0 | Top bars | `0x0001` |
-| 1 | Upper verticals + mid horizontals | `0x0722` |
-| 2 | Middle verticals | `0x00C0` |
-| 3 | Lower verticals + diagonals | `0x3814` |
-| 4 | Bottom bars | `0x4008` |
+| 0 | Top horizontal (a) | `0x0001` |
+| 1 | Upper verticals + diagonals (b, f, h, j, k) | `0x0722` |
+| 2 | Mid horizontals (g1, g2) | `0x00C0` |
+| 3 | Lower verticals + diagonals (c, e, l, m, n) | `0x3814` |
+| 4 | Bottom horizontal + dp (d, dp) | `0x4008` |
 
 As an **in** transition, rows are revealed one at a time (characters "draw" from top-down or bottom-up). As an **out** transition, rows are stripped away.
 
@@ -206,6 +206,8 @@ Inline codes appear within page content. They modify rendering state but produce
 | `0x86` | `INL_ALIGN_R` | — | Right-align. For scroll: 24-column initial offset. |
 | `0x87` | `INL_ALIGN_L` | — | Left-align (default). |
 | `0x88` | `INL_WAVE_TBL` | `0x90–0x9F` | Select wave table index for DISP_WAVE. |
+| `0x89` | `INL_GLYPH` | 2 bytes: seg_lo, seg_hi | Insert a one-off custom glyph. Rendered as a single visible character. |
+| `0x8A` | `INL_CHARDEF` | 3 bytes: code, seg_lo, seg_hi | Define a reusable custom character in the 0xA0–0xFE range. |
 
 #### Important Usage Notes
 
@@ -215,7 +217,90 @@ Inline codes appear within page content. They modify rendering state but produce
 
 **`INL_ALIGN_*` dual meaning:** For static/typewriter effects, controls text positioning. For scroll effects, controls initial blank offset. For marquee, controls the centred hold position.
 
-### 3.4 Wave Tables
+### 3.4 Custom Characters
+
+Two mechanisms for displaying arbitrary segment patterns beyond the built-in font.
+
+#### INL_CHARDEF — Reusable Custom Characters
+
+Defines a character code in the range `0xA0–0xFE` with a custom segment pattern. Once defined, the code can be used anywhere in the page content just like a normal ASCII character.
+
+```
+0x8A <code> <seg_lo> <seg_hi>
+```
+
+- `code`: character code `0xA0–0xFE`
+- `seg_lo`, `seg_hi`: 16-bit segment bitmask (little-endian)
+
+The definition is invisible — it produces no display output. The character code can then appear in content bytes and will be rendered using the defined pattern. Definitions persist for the duration of the page and are cleared on page load.
+
+**Example — define a heart as 0xA0 and use it:**
+```
+8A A0 01 07     ; INL_CHARDEF: code=0xA0, segments=0x0701
+"I "
+A0              ; renders the heart glyph
+" Z80"
+```
+
+#### INL_GLYPH — One-Off Inline Glyphs
+
+Inserts a single custom character directly at the current position. The engine auto-assigns a code internally and stores it in the same custom character table.
+
+```
+0x89 <seg_lo> <seg_hi>
+```
+
+The glyph is a visible character — it occupies one display column. All inline attributes (`INL_BRIGHT`, `INL_FLASH`, etc.) apply to it normally.
+
+**Example — inline right arrow:**
+```
+89 40 21        ; INL_GLYPH: segments=0x2140 (right arrow)
+```
+
+#### Limits and Behaviour
+
+Both `INL_CHARDEF` and `INL_GLYPH` share a single table of **16 entries** per page (`MAX_CUSTOM_CHARS`). `INL_GLYPH` auto-assigns codes counting down from `0xFE`. If the table is full, additional definitions/glyphs are silently ignored.
+
+Custom characters work with all display effects and transitions — they go through the same `font_lookup` path as standard characters. All per-character attributes (brightness, flash) apply normally.
+
+#### Segment Bit Mapping
+
+The segment bitmask uses this bit assignment (from datasheet):
+
+```
+Bit  0 = a   (top horizontal)            = 1
+Bit  1 = b   (upper right vertical)      = 2
+Bit  2 = c   (lower right vertical)      = 4
+Bit  3 = d   (bottom horizontal)         = 8
+Bit  4 = e   (lower left vertical)       = 16
+Bit  5 = f   (upper left vertical)       = 32
+Bit  6 = g1  (mid left horizontal)       = 64
+Bit  7 = g2  (mid right horizontal)      = 128
+Bit  8 = h   (top-left diagonal ↘)       = 256
+Bit  9 = j   (upper-mid vertical ↓)      = 512
+Bit 10 = k   (top-right diagonal ↙)      = 1024
+Bit 11 = l   (bottom-right diagonal ↗)   = 2048
+Bit 12 = m   (lower-mid vertical ↑)      = 4096
+Bit 13 = n   (bottom-left diagonal ↘)    = 8192
+Bit 14 = dp  (decimal point)             = 16384
+```
+
+```
+     ── a ──
+    |\  |  /|
+    f  h j k  b
+    |  \|/  |
+     g1  g2
+    |  /|\  |
+    e  n m l  c
+    |/  |  \|
+     ── d ──
+                dp
+```
+
+Note: the datasheet labels the lower-left diagonal as N (not the more common M in some references). The diagonal segments run from corners toward the centre intersection.
+
+### 3.5 Wave Tables
 
 Select with `INL_WAVE_TBL, INL_PARAM_BASE + n`. Default is table 0 (sine).
 
@@ -229,7 +314,7 @@ Select with `INL_WAVE_TBL, INL_PARAM_BASE + n`. Default is table 0 (sine).
 
 To add custom tables: append 32 bytes to the `wave_tables` block in ROM and increment `WAVE_TBL_COUNT`.
 
-### 3.5 Parameter Encoding
+### 3.6 Parameter Encoding
 
 Parameters use range `0x90–0x9F`, encoding values 0–15:
 
@@ -350,10 +435,11 @@ my_handler:
 
 | Region | Size | Contents |
 |--------|------|----------|
-| Engine state | ~48 bytes | Pointers, counters, flags, callback |
+| Engine state | ~50 bytes | Pointers, counters, flags, callback, glyph counter |
 | Display buffers | 144 bytes | disp_seg + disp_bright + disp_flash + shadow_seg |
 | Text workspace | 768 bytes | text_buf + attr_bright + attr_flags |
-| **Total RAM** | **~956 bytes** | |
+| Custom char table | 49 bytes | 16 entries × 3 bytes + count |
+| **Total RAM** | **~1011 bytes** | |
 | Font table | 192 bytes ROM | 96 entries × 2 bytes |
 | Wave tables | 160 bytes ROM | 5 × 32 bytes |
 | Other tables | 34 bytes ROM | Dissolve order (24) + vfade masks (10) |
@@ -378,7 +464,7 @@ my_handler:
 
 ## 8. Extension Points
 
-- Custom character definitions via inline codes
+- ~~Custom character definitions via inline codes~~ ✓ Implemented (see §3.4)
 - Conditional page skip based on flag bytes (achievable now via callback)
 - ~~Callback hooks at page boundaries~~ ✓ Implemented (see §5.4)
 - Priority message interruption of current stream

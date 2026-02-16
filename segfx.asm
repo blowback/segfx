@@ -60,6 +60,11 @@ INL_ALIGN_C     equ     85h
 INL_ALIGN_R     equ     86h
 INL_ALIGN_L     equ     87h
 INL_WAVE_TBL    equ     88h             ; next byte (INL_PARAM_BASE+n) selects wave table
+INL_GLYPH       equ     89h             ; next 2 bytes = raw segment bitmask, rendered as one char
+INL_CHARDEF     equ     8Ah             ; next byte = char code (A0-FE), then 2 bytes = segment pattern
+
+; Custom character table
+MAX_CUSTOM_CHARS equ    16              ; max custom glyph definitions per page
 
 ; Inline parameter range
 INL_PARAM_BASE  equ     90h             ; 90h..9Fh encode values 0..15
@@ -100,6 +105,7 @@ marquee_hold    dw      0               ; ticks remaining in marquee hold phase
 lfsr            db      0ACh            ; 8-bit LFSR for sparkle (non-zero seed)
 dirty           db      0               ; non-zero = display buffers need pushing to hw
 wave_tbl        db      0               ; wave table index (0=sine, 1=glint, ...)
+glyph_code      db      0FEh            ; next auto-assigned code for INL_GLYPH (counts down from 0xFE)
 page_index      db      0               ; current page number (0-based)
 callback        dw      0               ; user callback address (0 = disabled)
                 ends
@@ -129,6 +135,11 @@ attr_flags      ds      256             ; per-char flags (bit 0=flash, bit 6=spe
 
 ; Shadow buffer for segment-masking transitions (vfade in)
 shadow_seg      ds      DISP_COLS * 2   ; 48 bytes: copy of pre-rendered segments
+
+; Custom character definitions (INL_CHARDEF)
+; Each entry: 1 byte code (0xA0-0xFE) + 2 bytes segment pattern = 3 bytes
+custom_chars    ds      MAX_CUSTOM_CHARS * 3    ; 48 bytes
+custom_count    db      0                       ; number of defined custom chars
 
 
 ; ============================================================================
@@ -310,6 +321,10 @@ font_table:
 ; Clobbers: DE
 ; ============================================================================
 font_lookup:
+                ; Check if this is a custom character (>= 0xA0)
+                cp      0A0h
+                jr      nc,.fl_custom
+                ; Standard ASCII: index into font_table
                 sub     20h
                 ld      l,a
                 ld      h,0
@@ -321,6 +336,47 @@ font_lookup:
                 ld      h,(hl)
                 ld      l,a
                 ret
+
+.fl_custom:     ; Search custom_chars table for matching code
+                push    bc
+                ld      c,a             ; C = target code
+                ld      a,(custom_count)
+                or      a
+                jr      z,.fl_notfound
+                ld      b,a             ; B = count
+                ld      hl,custom_chars
+.fl_search:     ld      a,(hl)          ; code
+                cp      c
+                jr      z,.fl_found
+                inc     hl
+                inc     hl
+                inc     hl              ; next entry (3 bytes)
+                djnz    .fl_search
+.fl_notfound:   ; Not found — return blank
+                pop     bc
+                ld      hl,0
+                ret
+.fl_found:      inc     hl
+                ld      a,(hl)          ; seg low
+                inc     hl
+                ld      h,(hl)          ; seg high
+                ld      l,a
+                pop     bc
+                ret
+
+
+; ============================================================================
+; CHAR_TO_SEGMENTS — Get segment bitmask for current character
+; ============================================================================
+; Input:  IX = pointer to text_buf entry
+;         IY = pointer to attr_flags entry
+; Output: HL = segment bitmask
+; Clobbers: AF, DE
+; Note: Caller must push/pop BC, IX, IY around this call
+; ============================================================================
+char_to_segments:
+                ld      a,(ix+0)
+                jp      font_lookup     ; handles both standard and custom chars
 
 
 ; ============================================================================
@@ -512,7 +568,7 @@ segfx_tick:
                 xor     a
                 ld      (state.fx_pos),a
                 ld      (state.fx_sub),a
-                jr      .mark_dirty
+                jp      .mark_dirty
 
 .dwell_mqchk:   ; Marquee: if still in hold (state 1), start scroll-out
                 ld      a,(state.marquee_state)
@@ -727,6 +783,9 @@ page_load:
                 ld      (state.text_offset),a
                 ld      (state.marquee_state),a
                 ld      (state.wave_tbl),a
+                ld      (custom_count),a
+                ld      a,0FEh
+                ld      (state.glyph_code),a
                 ld      a,0FFh
                 ld      (state.inl_bright),a
 
@@ -879,7 +938,11 @@ decode_content:
                 cp      INL_ALIGN_L
                 jp      z,.i_al
                 cp      INL_WAVE_TBL
-                jr      z,.i_wtbl
+                jp      z,.i_wtbl
+                cp      INL_GLYPH
+                jp      z,.i_glyph
+                cp      INL_CHARDEF
+                jp      z,.i_chardef
                 inc     hl              ; unknown → skip
                 jp      .lp
 
@@ -959,6 +1022,123 @@ decode_content:
                 inc     hl
                 jp      .lp
 
+.i_glyph:       ; Next 2 bytes = raw segment bitmask
+                ; Auto-assign a code, add to custom_chars, emit code as visible char
+                ld      a,(custom_count)
+                cp      MAX_CUSTOM_CHARS
+                jr      nc,.i_gl_skip   ; table full
+                ; Save all decode state
+                push    de              ; text_buf ptr
+                push    bc              ; B=vis_len, C=text_len
+                push    ix              ; attr_bright ptr
+                push    iy              ; attr_flags ptr
+                ; Get auto code
+                ld      a,(state.glyph_code)
+                ld      c,a             ; C = char code
+                dec     a
+                ld      (state.glyph_code),a
+                ; Read seg pattern from stream
+                inc     hl
+                ld      e,(hl)          ; seg low
+                inc     hl
+                ld      d,(hl)          ; seg high
+                push    hl              ; save stream ptr (past seg_hi)
+                ; Find table slot
+                ld      a,(custom_count)
+                ld      b,a
+                add     a,a             ; ×2
+                add     a,b             ; ×3
+                ld      l,a
+                ld      h,0
+                ld      b,0             ; BC = 00:char_code (B cleared)
+                push    bc              ; save char code
+                ld      bc,custom_chars
+                add     hl,bc           ; HL = slot
+                pop     bc              ; C = char code
+                ; Write entry: code, seg_lo, seg_hi
+                ld      (hl),c
+                inc     hl
+                ld      (hl),e
+                inc     hl
+                ld      (hl),d
+                ; Increment custom count
+                ld      a,(custom_count)
+                inc     a
+                ld      (custom_count),a
+                ; Restore stream ptr and decode state
+                pop     hl              ; stream ptr
+                pop     iy
+                pop     ix
+                pop     bc              ; B=vis_len, C=text_len
+                pop     de              ; text_buf ptr
+                ; Emit the auto-assigned code as a visible character
+                ld      a,(state.glyph_code)
+                inc     a               ; we decremented earlier, get back the code we used
+                ld      (de),a          ; text_buf[n] = char code
+                ld      a,(state.inl_bright)
+                ld      (ix+0),a        ; brightness: normal
+                ld      a,(state.inl_flash)
+                ld      (iy+0),a        ; flash flag: normal
+                inc     de
+                inc     ix
+                inc     iy
+                inc     c               ; total count
+                inc     b               ; visible count
+                inc     hl
+                jp      .lp
+
+.i_gl_skip:     ; Table full — skip 2 bytes
+                inc     hl
+                inc     hl
+                inc     hl
+                jp      .lp
+
+.i_chardef:     ; Define a custom character: next byte = code (A0-FE), then 2 bytes = pattern
+                ; Stored in custom_chars table for font_lookup to find
+                ld      a,(custom_count)
+                cp      MAX_CUSTOM_CHARS
+                jr      nc,.i_cd_skip   ; table full, ignore
+                ; Calculate table slot: custom_chars + count × 3
+                push    de
+                push    bc
+                ld      c,a             ; C = count
+                add     a,a             ; ×2
+                add     a,c             ; ×3
+                ld      e,a
+                ld      d,0
+                push    hl              ; save stream ptr
+                ld      hl,custom_chars
+                add     hl,de           ; HL = slot address
+                pop     de              ; DE = stream ptr (was HL)
+                ; Read: code, seg_lo, seg_hi from stream
+                inc     de              ; skip INL_CHARDEF
+                ld      a,(de)          ; char code
+                ld      (hl),a
+                inc     hl
+                inc     de
+                ld      a,(de)          ; seg low
+                ld      (hl),a
+                inc     hl
+                inc     de
+                ld      a,(de)          ; seg high
+                ld      (hl),a
+                ex      de,hl           ; HL = stream ptr (past last byte)
+                ; Increment count
+                ld      a,(custom_count)
+                inc     a
+                ld      (custom_count),a
+                pop     bc
+                pop     de
+                inc     hl
+                jp      .lp
+
+.i_cd_skip:     ; Skip the 3 parameter bytes
+                inc     hl
+                inc     hl
+                inc     hl
+                inc     hl
+                jp      .lp
+
 .char:          ld      (de),a
                 push    af
                 ld      a,(state.inl_bright)
@@ -1019,12 +1199,11 @@ render_full:
                 bit     ATTR_F_SPEED,(iy+0)
                 jr      nz,.skip        ; speed change: no render, no column advance
 
-                ; Font lookup
-                ld      a,(ix+0)
+                ; Segment lookup (handles both normal chars and direct glyphs)
                 push    bc
                 push    ix
                 push    iy
-                call    font_lookup     ; HL = bitmask
+                call    char_to_segments ; HL = bitmask
                 pop     iy
                 pop     ix
                 pop     bc
@@ -1176,8 +1355,6 @@ render_scrolled:
                 jr      nz,.blank_pop   ; treat speed changes as blank
 
                 ; Write disp_flash[C] from attr_flags flash bit
-                ; (C is in the BC on the stack, but also still valid in C register
-                ;  since push bc didn't change C)
                 push    hl              ; save attr_flags ptr
                 ld      a,0
                 bit     ATTR_F_FLASH,(hl)
@@ -1190,15 +1367,17 @@ render_scrolled:
                 add     hl,de
                 pop     de
                 ld      (hl),a
-                pop     hl              ; restore attr_flags ptr (don't need it, but balanced)
+                pop     hl              ; HL = attr_flags ptr
 
-                ; Fetch char
+                ; Font lookup (handles both standard ASCII and custom chars >= 0xA0)
                 ld      hl,text_buf
+                push    de
+                ld      d,0
                 add     hl,de
+                pop     de
                 ld      a,(hl)
-
-                ; Font lookup
                 call    font_lookup     ; HL = bitmask
+
                 pop     de              ; E = source index, D = wrap point
                 pop     bc              ; C = display column, B = loop counter
 
@@ -2065,9 +2244,10 @@ fx_dsp_typewriter:
                 ; Write segment pattern
                 push    de              ; save display column
                 ld      b,0
+                ; Font lookup (handles standard + custom chars)
                 ld      hl,text_buf
                 add     hl,bc
-                ld      a,(hl)          ; ASCII char
+                ld      a,(hl)
                 call    font_lookup     ; HL = bitmask
                 pop     de              ; E = display column
                 ; disp_seg[E*2]
@@ -2353,11 +2533,10 @@ fx_dsp_marquee_l:
                 bit     ATTR_F_SPEED,(iy+0)
                 jr      nz,.mrs         ; skip speed, no column advance
 
-                ld      a,(ix+0)
                 push    bc
                 push    ix
                 push    iy
-                call    font_lookup
+                call    char_to_segments
                 pop     iy
                 pop     ix
                 pop     bc
@@ -2848,6 +3027,25 @@ example_stream:
                 db      "INSERT "
                 db      INL_FLASH
                 db      "COIN"
+                db      PAGE_END
+
+                ; Page 10: Custom characters demo
+                ; Heart: h,j (upper bumps), g1,g2 (middle), m,k (lower V)
+                ;   bits: h=8, j=10, g1=6, g2=7, k=11, m=13 = 0x2DC0
+                ; Right arrow: a,g1,g2,d,j,k = pointing right
+                ;   bits: a=0, d=3, g1=6, g2=7, j=10, k=11 = 0x0CC9
+                db      PAGE_START
+                db      TRANS_FADE
+                db      DISP_STATIC
+                db      TRANS_FADE
+                db      3
+                db      02h, 58h        ; 600 ticks = 12 sec
+                db      INL_CHARDEF, 0A0h, 001h, 007h  ; heart = 0x0701 (lo, hi)
+                db      INL_ALIGN_C
+                db      "I "
+                db      0A0h            ; heart character
+                db      " Z80 "
+                db      INL_GLYPH, 040h, 021h          ; right arrow = 0x2140 (lo, hi)
                 db      PAGE_END
 
                 db      END_STREAM
