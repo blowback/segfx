@@ -1898,31 +1898,23 @@ fx_dsp_marquee_l:
                 ret
 
 .mql_out:       ; Scroll out left: text slides from centered to off-screen left
-                ; Start col = calc_start_col - fx_pos
+                ; Done when start_col - fx_pos + vis_len <= 0
+                ; i.e. fx_pos >= calc_start_col + vis_len
                 ld      a,(state.fx_pos)
-                ld      b,a
+                ld      b,a             ; B = fx_pos
                 push    bc
-                call    calc_start_col
+                call    calc_start_col  ; A = start_col
                 pop     bc
-                sub     b               ; A = start_col - fx_pos (may go negative)
-                jr      c,.mql_gone     ; fully off screen left
-                ; Check if entire text is off screen
-                push    af
+                ld      c,a             ; C = start_col
                 ld      a,(state.vis_len)
-                add     a,c             ; wait, C isn't set here
-                pop     af
-                ; Simpler: if fx_pos > calc_start_col + vis_len, we're done
-                push    af
-                call    calc_start_col
-                ld      c,a
-                ld      a,(state.vis_len)
-                add     a,c             ; A = rightmost column + 1
-                ld      c,a
-                ld      a,(state.fx_pos)
-                cp      c
-                pop     af
-                jr      nc,.mql_gone
+                add     a,c             ; A = start_col + vis_len = rightmost col + 1
+                cp      b
+                jr      z,.mql_gone     ; fx_pos == start_col + vis_len: fully off
+                jr      c,.mql_gone     ; fx_pos > start_col + vis_len: fully off
 
+                ; Render at column (start_col - fx_pos); may be negative = partially off
+                ld      a,c
+                sub     b               ; A = start_col - fx_pos (signed)
                 call    .mql_render_at
                 ld      hl,state.fx_pos
                 inc     (hl)
@@ -1935,10 +1927,11 @@ fx_dsp_marquee_l:
                 ld      (state.tick_count+1),a
                 ret
 
-; Helper: render text starting at display column A (signed-ish, 0..23)
+; Helper: render text starting at display column A (may be negative/underflowed)
 ; Clears display first, then places glyphs starting at column A
+; If A > 127 (i.e. underflowed from negative), skip leading chars until on-screen
 .mql_render_at:
-                ld      c,a             ; C = start column
+                ld      c,a             ; C = start column (may be underflowed)
                 ; Clear display
                 push    bc
                 ld      hl,disp_seg
@@ -1962,17 +1955,15 @@ fx_dsp_marquee_l:
                 ld      ix,text_buf
                 ld      iy,attr_flags
 
-.mrl:           ld      a,c
+.mrl:           ; Check if column is off the right edge
+                ld      a,c
                 cp      DISP_COLS
-                ret     nc              ; past right edge, done
+                jr      nc,.mrl_offscr  ; C >= 24: either off right or underflowed negative
 
                 bit     ATTR_F_PAUSE,(iy+0)
                 jr      nz,.mrs         ; skip pause, no column advance
-
-                ; Only render if column >= 0 (C is unsigned, but if we entered
-                ; with a high value from underflow, skip it)
-                ; Actually C is unsigned 0..255, so just check < DISP_COLS above
-                ; and we're fine since we only call with valid start cols
+                bit     ATTR_F_SPEED,(iy+0)
+                jr      nz,.mrs         ; skip speed, no column advance
 
                 ld      a,(ix+0)
                 push    bc
@@ -2004,6 +1995,19 @@ fx_dsp_marquee_l:
                 pop     bc
 
                 inc     c
+                jr      .mrs
+
+.mrl_offscr:    ; C >= 24. If C > 127, it's an underflowed negative — skip char, advance C
+                ; If C < 128 (i.e. 24..127), we're past right edge — done
+                bit     7,c
+                ret     z               ; C is 24..127 = past right edge, done
+
+                ; Negative column: skip this char but still advance column
+                bit     ATTR_F_PAUSE,(iy+0)
+                jr      nz,.mrs         ; pause: no column advance
+                bit     ATTR_F_SPEED,(iy+0)
+                jr      nz,.mrs         ; speed: no column advance
+                inc     c               ; advance column (towards 0)
 
 .mrs:           inc     ix
                 inc     iy
