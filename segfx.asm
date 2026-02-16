@@ -563,8 +563,6 @@ page_load:
                 jr      z,.init_scroll_offset
                 cp      DISP_SCROLL_R
                 jr      z,.init_scroll_offset
-                cp      DISP_BOUNCE
-                jr      z,.init_scroll_offset
                 jr      .no_scroll_offset
 
 .init_scroll_offset:
@@ -2276,7 +2274,7 @@ example_stream:
                 ; INL_ALIGN_C gives ~12 columns of leading blank before scroll starts
                 db      PAGE_START
                 db      TRANS_NONE
-                db      DISP_SCROLL_L
+                db      DISP_SCROLL_R
                 db      TRANS_NONE
                 db      2               ; initial speed: fast
                 db      03h, 20h        ; 800 ticks = 16 sec
