@@ -415,7 +415,7 @@ segfx_tick:
                 jr      z,.no_pause
                 dec     a
                 ld      (state.pause_count),a
-                jr      .done           ; pausing: no output needed
+                jp      .done           ; pausing: no output needed
 .no_pause:
 
                 ; Decrement dwell counter every tick (not per step)
@@ -1902,17 +1902,36 @@ fx_dsp_marquee_l:
 .mql_centered:  ; Switch to hold state
                 ld      a,1
                 ld      (state.marquee_state),a
+                ; Copy remaining dwell ticks as hold duration
+                ld      hl,(state.tick_count)
+                ld      (state.marquee_hold),hl
+                ; Set tick_count high so normal dwell doesn't expire during hold/scroll-out
+                ld      hl,0FFFFh
+                ld      (state.tick_count),hl
                 ; Render in final centered position
                 call    render_full
                 call    set_full_bright
-                ; Hold duration = remaining tick_count (page dwell).
-                ; The dwell countdown in segfx_tick runs every tick.
-                ; When it expires, .dwell_expired detects we're a marquee
-                ; and triggers scroll-out instead of page exit.
                 ret
 
-.mql_hold:      ; Holding — dwell is counting down automatically.
-                ; Nothing to do here; display is already rendered.
+.mql_hold:      ; Count down hold timer every step
+                ; Subtract speed from hold each step (approximates per-tick)
+                ld      hl,(state.marquee_hold)
+                ld      a,(state.speed)
+                ld      c,a
+                ld      b,0
+                or      a               ; clear carry
+                sbc     hl,bc           ; hl -= speed
+                jr      c,.mql_hold_done
+                ld      a,h
+                or      l
+                jr      z,.mql_hold_done
+                ld      (state.marquee_hold),hl
+                ret
+.mql_hold_done: ; Hold expired — start scroll out
+                ld      a,2
+                ld      (state.marquee_state),a
+                xor     a
+                ld      (state.fx_pos),a
                 ret
 
 .mql_out:       ; Scroll out left: text slides from centered to off-screen left
@@ -2099,11 +2118,30 @@ fx_dsp_marquee_r:
 .mqr_centered:
                 ld      a,1
                 ld      (state.marquee_state),a
+                ld      hl,(state.tick_count)
+                ld      (state.marquee_hold),hl
+                ld      hl,0FFFFh
+                ld      (state.tick_count),hl
                 call    render_full
                 call    set_full_bright
                 ret
 
-.mqr_hold:      ; Holding — dwell handles timing, .dwell_expired triggers scroll-out
+.mqr_hold:      ld      hl,(state.marquee_hold)
+                ld      a,(state.speed)
+                ld      c,a
+                ld      b,0
+                or      a
+                sbc     hl,bc
+                jr      c,.mqr_hold_done
+                ld      a,h
+                or      l
+                jr      z,.mqr_hold_done
+                ld      (state.marquee_hold),hl
+                ret
+.mqr_hold_done: ld      a,2
+                ld      (state.marquee_state),a
+                xor     a
+                ld      (state.fx_pos),a
                 ret
 
 .mqr_out:       ; Scroll out right: start_col = calc_start_col + fx_pos
@@ -2356,7 +2394,7 @@ example_stream:
                 db      DISP_MARQUEE_L
                 db      TRANS_NONE
                 db      2
-                db      02h, 58h        ; 600 ticks = 12 sec
+                db      00h, 64h        ; 100 ticks = 2 sec hold
                 db      INL_ALIGN_C
                 db      "WAVE 1"
                 db      PAGE_END
