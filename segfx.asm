@@ -554,6 +554,44 @@ page_load:
                 call    decode_content
                 ld      (state.stream_ptr),hl
 
+                ; For scroll/bounce effects, set initial text_offset so text
+                ; doesn't immediately start scrolling off column 0.
+                ; Uses align_mode: centre = start half-display in,
+                ; right = start at right edge, left = start at column 0 (default).
+                ld      a,(state.fx_display)
+                cp      DISP_SCROLL_L
+                jr      z,.init_scroll_offset
+                cp      DISP_SCROLL_R
+                jr      z,.init_scroll_offset
+                cp      DISP_BOUNCE
+                jr      z,.init_scroll_offset
+                jr      .no_scroll_offset
+
+.init_scroll_offset:
+                ; For scroll effects, align_mode means initial blank columns:
+                ;   left (0) = no offset, start at column 0
+                ;   centre (1) = start with DISP_COLS/2 blank columns
+                ;   right (2) = start with DISP_COLS blank columns (full screen of blanks)
+                ld      a,(state.align_mode)
+                or      a
+                jr      z,.no_scroll_offset
+                cp      1
+                jr      z,.scroll_half
+                ; Right: full display of blanks
+                ld      b,DISP_COLS
+                jr      .scroll_set
+.scroll_half:   ld      b,DISP_COLS / 2
+.scroll_set:    ; text_offset = wrap_point - B
+                ld      a,(state.text_len)
+                add     a,DISP_COLS
+                sub     b
+                ld      (state.text_offset),a
+                ; Reset align_mode so render_full/set_full_bright use left-align
+                xor     a
+                ld      (state.align_mode),a
+
+.no_scroll_offset:
+
                 call    display_clear
 
                 ; TRANS_NONE → skip entry, go straight to display
@@ -2235,12 +2273,14 @@ example_stream:
                 db      PAGE_END
 
                 ; Page 2: Scrolling instructions (with speed changes)
+                ; INL_ALIGN_C gives ~12 columns of leading blank before scroll starts
                 db      PAGE_START
                 db      TRANS_NONE
                 db      DISP_SCROLL_L
                 db      TRANS_NONE
                 db      2               ; initial speed: fast
                 db      03h, 20h        ; 800 ticks = 16 sec
+                db      INL_ALIGN_C
                 db      "ARROWS TO MOVE"
                 db      INL_SPEED, INL_PARAM_BASE + 4
                 db      " --- "
