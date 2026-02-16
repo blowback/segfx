@@ -114,6 +114,7 @@ state           SEGFX_STATE
 ; Display output buffers (contiguous for fast clear)
 disp_seg        ds      DISP_COLS * 2   ; 48 bytes: segment bitmasks
 disp_bright     ds      DISP_COLS       ; 24 bytes: brightness
+disp_flash      ds      DISP_COLS       ; 24 bytes: per-column flash flag (0=solid, 1=flash)
 
 ; Text workspace
 text_buf        ds      256             ; decoded ASCII text
@@ -327,8 +328,8 @@ segfx_init:
 ; DISPLAY_CLEAR — Zero segment + brightness buffers
 ; ============================================================================
 display_clear:
-                ld      hl,disp_seg     ; disp_seg and disp_bright are contiguous
-                ld      b,DISP_COLS * 2 + DISP_COLS
+                ld      hl,disp_seg     ; disp_seg, disp_bright, disp_flash are contiguous
+                ld      b,DISP_COLS * 2 + DISP_COLS + DISP_COLS
                 xor     a
 .lp:            ld      (hl),a
                 inc     hl
@@ -359,19 +360,33 @@ segfx_output:
                 inc     c
                 djnz    .seg
 
-                ; Pass 2: Brightness (scaled to MAX_BRIGHT)
+                ; Pass 2: Brightness (scaled to MAX_BRIGHT, with per-char flash)
                 ld      ix,disp_bright
+                ld      iy,disp_flash
                 ld      c,0             ; C = column counter
                 ld      b,DISP_COLS
 .brt:           push    bc
                 ld      a,c             ; A = column
                 ld      e,a             ; E = column
                 ld      a,(ix+0)        ; A = raw brightness 0..255
-                srl     a               ; A = brightness >> 1 (0..127) for MAX_BRIGHT=128
+                ; Check per-column flash: if flash flag set and flash_phase=0, force dark
+                bit     0,(iy+0)
+                jr      z,.brt_nofl     ; not a flashing column
+                push    af
+                ld      a,(state.flash_phase)
+                or      a
+                jr      nz,.brt_fl_on
+                pop     af
+                xor     a               ; force brightness 0
+                jr      .brt_scale
+.brt_fl_on:     pop     af              ; restore original brightness
+.brt_nofl:
+.brt_scale:     srl     a               ; A = brightness >> 1 (0..127) for MAX_BRIGHT=128
                 ld      c,a             ; C = scaled brightness
                 ld      a,e             ; A = column
                 call    BIOS_BRT
                 inc     ix
+                inc     iy
                 pop     bc
                 inc     c
                 djnz    .brt
@@ -830,6 +845,19 @@ render_full:
                 inc     hl
                 ld      (hl),d
 
+                ; Store flash flag at disp_flash[C]
+                push    de
+                ld      e,c
+                ld      d,0
+                ld      hl,disp_flash
+                add     hl,de
+                bit     ATTR_F_FLASH,(iy+0)
+                jr      z,.no_fl
+                ld      (hl),1
+                jr      .fl_done
+.no_fl:         ld      (hl),0
+.fl_done:       pop     de
+
                 inc     c               ; advance column
 
 .skip:          inc     ix
@@ -950,6 +978,23 @@ render_scrolled:
                 bit     ATTR_F_SPEED,(hl)
                 jr      nz,.blank_pop   ; treat speed changes as blank
 
+                ; Write disp_flash[C] from attr_flags flash bit
+                ; (C is in the BC on the stack, but also still valid in C register
+                ;  since push bc didn't change C)
+                push    hl              ; save attr_flags ptr
+                ld      a,0
+                bit     ATTR_F_FLASH,(hl)
+                jr      z,.scfl0
+                inc     a
+.scfl0:         ld      hl,disp_flash
+                push    de
+                ld      e,c
+                ld      d,0
+                add     hl,de
+                pop     de
+                ld      (hl),a
+                pop     hl              ; restore attr_flags ptr (don't need it, but balanced)
+
                 ; Fetch char
                 ld      hl,text_buf
                 add     hl,de
@@ -957,7 +1002,7 @@ render_scrolled:
 
                 ; Font lookup
                 call    font_lookup     ; HL = bitmask
-                pop     de              ; E = source index (don't need), D = wrap point
+                pop     de              ; E = source index, D = wrap point
                 pop     bc              ; C = display column, B = loop counter
 
                 ; Store at disp_seg[C*2] — must preserve D (wrap point)
@@ -2274,7 +2319,7 @@ example_stream:
                 ; INL_ALIGN_C gives ~12 columns of leading blank before scroll starts
                 db      PAGE_START
                 db      TRANS_NONE
-                db      DISP_SCROLL_R
+                db      DISP_SCROLL_L
                 db      TRANS_NONE
                 db      2               ; initial speed: fast
                 db      03h, 20h        ; 800 ticks = 16 sec
@@ -2368,15 +2413,17 @@ example_stream:
                 db      " --- 2026"
                 db      PAGE_END
 
-                ; Page 9: Flashing insert coin
+                ; Page 9: Per-char flash — "INSERT" solid, "COIN" flashes
                 db      PAGE_START
                 db      TRANS_WIPE_CTR
-                db      DISP_FLASH
+                db      DISP_STATIC
                 db      TRANS_WIPE_EDGE
                 db      6
                 db      02h, 58h        ; 600 ticks = 12 sec
                 db      INL_ALIGN_C
-                db      "INSERT COIN"
+                db      "INSERT "
+                db      INL_FLASH
+                db      "COIN"
                 db      PAGE_END
 
                 db      END_STREAM
