@@ -1513,6 +1513,7 @@ fx_dsp_scroll_l:
                 ld      b,0
 .no_wrap:       ld      a,b
                 ld      (state.text_offset),a
+                call    check_offset_speed
                 call    render_scrolled
                 jp      set_all_bright
 
@@ -1527,6 +1528,7 @@ fx_dsp_scroll_r:
                 jr      .set
 .dec:           dec     a
 .set:           ld      (state.text_offset),a
+                call    check_offset_speed
                 call    render_scrolled
                 jp      set_all_bright
 
@@ -1673,7 +1675,7 @@ fx_dsp_bounce:
                 ld      a,b
                 inc     a
                 ld      (state.text_offset),a
-                ret
+                jp      check_offset_speed
 
 .flip_right:    ld      a,1
                 ld      (state.bounce_dir),a
@@ -1685,10 +1687,34 @@ fx_dsp_bounce:
                 jr      z,.flip_left    ; at start, reverse
                 dec     a
                 ld      (state.text_offset),a
-                ret
+                jp      check_offset_speed
 
 .flip_left:     xor     a
                 ld      (state.bounce_dir),a
+                ret
+
+
+; ============================================================================
+; Helper: check_offset_speed — if text_buf[text_offset] is a speed marker,
+; apply it. Call after updating text_offset.
+; ============================================================================
+check_offset_speed:
+                ld      a,(state.text_offset)
+                ld      e,a
+                ld      d,0
+                ld      a,(state.text_len)
+                cp      e
+                ret     z               ; in gap region
+                ret     c               ; in gap region
+                ld      hl,attr_flags
+                add     hl,de
+                bit     ATTR_F_SPEED,(hl)
+                ret     z               ; not a speed entry
+                ld      hl,text_buf
+                add     hl,de
+                ld      a,(hl)
+                ld      (state.speed),a
+                ld      (state.step_timer),a
                 ret
 
 
@@ -2208,14 +2234,27 @@ example_stream:
                 db      "  SPACE INVADERS 3D   "
                 db      PAGE_END
 
-                ; Page 2: Scrolling instructions
+                ; Page 2: Scrolling instructions (with speed changes)
                 db      PAGE_START
                 db      TRANS_NONE
                 db      DISP_SCROLL_L
                 db      TRANS_NONE
                 db      2
-                db      02h, 58h        ; 600 ticks = 12 sec
-                db      "ARROWS TO MOVE --- Z TO FIRE --- P TO PAUSE --- SURVIVE AS LONG AS YOU CAN!"
+                db      03h, 20h        ; 800 ticks = 16 sec
+                db      INL_SPEED, INL_PARAM_BASE + 1
+                db      "ARROWS TO MOVE"
+                db      INL_SPEED, INL_PARAM_BASE + 4
+                db      " --- "
+                db      INL_SPEED, INL_PARAM_BASE + 1
+                db      "Z TO FIRE"
+                db      INL_SPEED, INL_PARAM_BASE + 4
+                db      " --- "
+                db      INL_SPEED, INL_PARAM_BASE + 1
+                db      "P TO PAUSE"
+                db      INL_SPEED, INL_PARAM_BASE + 4
+                db      " --- "
+                db      INL_SPEED, INL_PARAM_BASE + 1
+                db      "SURVIVE AS LONG AS YOU CAN!"
                 db      PAGE_END
 
                 ; Page 3: Marquee left
@@ -2278,14 +2317,19 @@ example_stream:
                 db      "GAME OVER"
                 db      PAGE_END
 
-                ; Page 8: Bouncing credits
+                ; Page 8: Bouncing credits (accelerates at edges)
                 db      PAGE_START
                 db      TRANS_WIPE_L
                 db      DISP_BOUNCE
                 db      TRANS_WIPE_R
-                db      2
+                db      1
                 db      03h, 0E8h       ; 1000 ticks = 20 sec
-                db      "PROGRAMMED BY TEAM ALPHA --- 2026"
+                db      INL_SPEED, INL_PARAM_BASE + 3
+                db      "PROGRAMMED BY"
+                db      INL_SPEED, INL_PARAM_BASE + 1
+                db      " TEAM ALPHA"
+                db      INL_SPEED, INL_PARAM_BASE + 3
+                db      " --- 2026"
                 db      PAGE_END
 
                 ; Page 9: Flashing insert coin
