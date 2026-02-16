@@ -59,6 +59,7 @@ INL_SPEED       equ     84h
 INL_ALIGN_C     equ     85h
 INL_ALIGN_R     equ     86h
 INL_ALIGN_L     equ     87h
+INL_WAVE_TBL    equ     88h             ; next byte (INL_PARAM_BASE+n) selects wave table
 
 ; Inline parameter range
 INL_PARAM_BASE  equ     90h             ; 90h..9Fh encode values 0..15
@@ -98,6 +99,7 @@ marquee_state   db      0               ; 0=scrolling in, 1=holding, 2=scrolling
 marquee_hold    dw      0               ; ticks remaining in marquee hold phase
 lfsr            db      0ACh            ; 8-bit LFSR for sparkle (non-zero seed)
 dirty           db      0               ; non-zero = display buffers need pushing to hw
+wave_tbl        db      0               ; wave table index (0=sine, 1=glint, ...)
                 ends
 
 
@@ -155,12 +157,48 @@ vfade_row_masks:
 dissolve_order:
                 db      11,3,19,7,15,0,22,5,17,9,13,2,20,6,23,10,16,1,21,8,14,4,18,12
 
-; 32-entry sine table, full cycle, 0x00..0xFF
-sine_table:
+; Wave tables: 32 entries each, full cycle, indexed by state.wave_tbl
+; All tables must be 32 bytes and contiguous.
+WAVE_TBL_SIZE   equ     32
+
+wave_tables:
+
+; Table 0: Sine — smooth full-range oscillation (original)
+wave_tbl_sine:
                 db      80h,98h,0B0h,0C6h,0DAh,0EAh,0F6h,0FDh
                 db      0FFh,0FDh,0F6h,0EAh,0DAh,0C6h,0B0h,98h
                 db      80h,67h,4Fh,39h,25h,15h,09h,02h
                 db      00h,02h,09h,15h,25h,39h,4Fh,67h
+
+; Table 1: Glint — narrow bright highlight sweeping across dim text
+wave_tbl_glint:
+                db      18h,18h,18h,18h,18h,18h,18h,18h
+                db      18h,18h,18h,20h,40h,80h,0FFh,0FFh
+                db      80h,40h,20h,18h,18h,18h,18h,18h
+                db      18h,18h,18h,18h,18h,18h,18h,18h
+
+; Table 2: Pulse — sharp on/off square-ish wave
+wave_tbl_pulse:
+                db      0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
+                db      0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
+                db      10h,10h,10h,10h,10h,10h,10h,10h
+                db      10h,10h,10h,10h,10h,10h,10h,10h
+
+; Table 3: Sawtooth — ramp up then drop
+wave_tbl_saw:
+                db      00h,08h,10h,18h,20h,28h,30h,38h
+                db      40h,48h,50h,58h,60h,68h,70h,78h
+                db      80h,88h,90h,98h,0A0h,0A8h,0B0h,0B8h
+                db      0C0h,0C8h,0D0h,0D8h,0E0h,0E8h,0F0h,0F8h
+
+; Table 4: Flame — flickery randomish low-mid brightness
+wave_tbl_flame:
+                db      30h,60h,20h,50h,80h,40h,70h,30h
+                db      90h,50h,20h,60h,0A0h,40h,80h,30h
+                db      70h,50h,0B0h,40h,60h,20h,90h,50h
+                db      30h,80h,40h,60h,20h,70h,50h,40h
+
+WAVE_TBL_COUNT  equ     5
 
 ; Font: ASCII 0x20..0x7F → 14-segment bitmasks (96 entries × 2 bytes)
 font_table:
@@ -617,6 +655,7 @@ page_load:
                 ld      (state.inl_flash),a
                 ld      (state.text_offset),a
                 ld      (state.marquee_state),a
+                ld      (state.wave_tbl),a
                 ld      a,0FFh
                 ld      (state.inl_bright),a
 
@@ -768,6 +807,8 @@ decode_content:
                 jp      z,.i_ar
                 cp      INL_ALIGN_L
                 jp      z,.i_al
+                cp      INL_WAVE_TBL
+                jr      z,.i_wtbl
                 inc     hl              ; unknown → skip
                 jp      .lp
 
@@ -837,6 +878,13 @@ decode_content:
 
 .i_al:          xor     a
                 ld      (state.align_mode),a
+                inc     hl
+                jp      .lp
+
+.i_wtbl:        inc     hl
+                ld      a,(hl)
+                sub     INL_PARAM_BASE  ; 0..15
+                ld      (state.wave_tbl),a
                 inc     hl
                 jp      .lp
 
@@ -1830,7 +1878,7 @@ fx_dsp_breathe:
                 and     1Fh
                 ld      e,a
                 ld      d,0
-                ld      hl,sine_table
+                ld      hl,wave_tbl_sine
                 add     hl,de
                 ld      a,(hl)
                 ld      hl,disp_bright
@@ -2553,23 +2601,46 @@ lfsr_next:
 
 ; --- WAVE ---
 fx_dsp_wave:
+                ; Compute table base: wave_tables + (wave_tbl × 32)
+                ld      a,(state.wave_tbl)
+                ; Clamp to valid range
+                cp      WAVE_TBL_COUNT
+                jr      c,.tbl_ok
+                xor     a               ; default to sine
+.tbl_ok:        ld      e,a
+                ld      d,0
+                ; ×32: shift left 5
+                sla     e
+                rl      d
+                sla     e
+                rl      d
+                sla     e
+                rl      d
+                sla     e
+                rl      d
+                sla     e
+                rl      d               ; DE = wave_tbl × 32
+                ld      ix,wave_tables
+                add     ix,de           ; IX = table base
+
                 ld      a,(state.fx_pos)
-                ld      d,a
+                ld      d,a             ; D = phase offset
                 ld      hl,disp_bright
                 ld      b,DISP_COLS
                 ld      c,0
 .lp:            ld      a,d
                 add     a,c
-                and     1Fh
+                and     1Fh             ; mod 32
                 push    hl
                 push    bc
-                push    de              ; save D = fx_pos offset
+                push    de
                 ld      e,a
                 ld      d,0
-                ld      hl,sine_table
+                push    ix
+                pop     hl              ; HL = table base
                 add     hl,de
                 ld      a,(hl)
-                pop     de              ; restore D = fx_pos offset
+                pop     de
                 pop     bc
                 pop     hl
                 ld      (hl),a
@@ -2659,13 +2730,14 @@ example_stream:
                 db      "HIGH SCORE  12500"
                 db      PAGE_END
 
-                ; Page 6: Wave effect with vfade-down in, vfade-up out
+                ; Page 6: Glint highlight sweep
                 db      PAGE_START
                 db      TRANS_VFADE_D
                 db      DISP_WAVE
                 db      TRANS_VFADE_U
-                db      2
+                db      1               ; fast speed for smooth glint
                 db      01h, 2Ch        ; 300 ticks = 6 sec
+                db      INL_WAVE_TBL, INL_PARAM_BASE + 1   ; table 1 = glint
                 db      "    ROUND COMPLETE!     "
                 db      PAGE_END
 
