@@ -2239,9 +2239,8 @@ example_stream:
                 db      TRANS_NONE
                 db      DISP_SCROLL_L
                 db      TRANS_NONE
-                db      2
+                db      2               ; initial speed: fast
                 db      03h, 20h        ; 800 ticks = 16 sec
-                db      INL_SPEED, INL_PARAM_BASE + 1
                 db      "ARROWS TO MOVE"
                 db      INL_SPEED, INL_PARAM_BASE + 4
                 db      " --- "
@@ -2322,9 +2321,8 @@ example_stream:
                 db      TRANS_WIPE_L
                 db      DISP_BOUNCE
                 db      TRANS_WIPE_R
-                db      1
+                db      4               ; initial speed: moderate
                 db      03h, 0E8h       ; 1000 ticks = 20 sec
-                db      INL_SPEED, INL_PARAM_BASE + 3
                 db      "PROGRAMMED BY"
                 db      INL_SPEED, INL_PARAM_BASE + 1
                 db      " TEAM ALPHA"
