@@ -63,6 +63,7 @@ INL_PARAM_BASE  equ     90h             ; 90h..9Fh encode values 0..15
 
 ; Attribute flag bits
 ATTR_F_FLASH    equ     0               ; bit 0: per-char flash
+ATTR_F_SPEED    equ     6               ; bit 6: speed change marker
 ATTR_F_PAUSE    equ     7               ; bit 7: pause marker
 
 
@@ -682,7 +683,15 @@ decode_content:
 .i_spd:         inc     hl
                 ld      a,(hl)
                 sub     INL_PARAM_BASE
-                inc     a               ; 1..16
+                inc     a               ; 1..16 = new speed value
+                ld      (de),a          ; store speed value in text_buf
+                ld      (ix+0),0        ; no brightness (invisible)
+                ld      (iy+0),1 << ATTR_F_SPEED
+                inc     de
+                inc     ix
+                inc     iy
+                inc     c               ; total count, NOT visible count
+                ; Also set initial speed from first INL_SPEED encountered
                 ld      (state.speed),a
                 inc     hl
                 jp      .lp
@@ -759,6 +768,9 @@ render_full:
                 bit     ATTR_F_PAUSE,(iy+0)
                 jr      nz,.skip        ; pause: no render, no column advance
 
+                bit     ATTR_F_SPEED,(iy+0)
+                jr      nz,.skip        ; speed change: no render, no column advance
+
                 ; Font lookup
                 ld      a,(ix+0)
                 push    bc
@@ -808,6 +820,9 @@ set_full_bright:
                 ld      hl,attr_bright
 
 .lp:            bit     ATTR_F_PAUSE,(ix+0)
+                jr      nz,.skip
+
+                bit     ATTR_F_SPEED,(ix+0)
                 jr      nz,.skip
 
                 ld      a,c
@@ -888,7 +903,7 @@ render_scrolled:
                 jr      c,.blank        ; text_len < index
                 jr      z,.blank        ; text_len == index
 
-                ; Check pause marker
+                ; Check pause/speed markers
                 push    bc
                 push    de
                 ld      d,0
@@ -896,6 +911,8 @@ render_scrolled:
                 add     hl,de
                 bit     ATTR_F_PAUSE,(hl)
                 jr      nz,.blank_pop   ; treat pauses as blank
+                bit     ATTR_F_SPEED,(hl)
+                jr      nz,.blank_pop   ; treat speed changes as blank
 
                 ; Fetch char
                 ld      hl,text_buf
@@ -1530,13 +1547,27 @@ fx_dsp_typewriter:
                 ld      hl,attr_flags
                 add     hl,bc
                 bit     ATTR_F_PAUSE,(hl)
-                jr      z,.tw_vis
+                jr      z,.tw_chk_spd
 
                 ; Load pause duration and advance
                 ld      hl,text_buf
                 add     hl,bc
                 ld      a,(hl)
                 ld      (state.pause_count),a
+                ld      hl,state.fx_pos
+                inc     (hl)
+                ret
+
+.tw_chk_spd:    ; Speed change marker?
+                bit     ATTR_F_SPEED,(hl)
+                jr      z,.tw_vis
+
+                ; Apply new speed and advance (no visible output)
+                ld      hl,text_buf
+                add     hl,bc
+                ld      a,(hl)
+                ld      (state.speed),a
+                ld      (state.step_timer),a
                 ld      hl,state.fx_pos
                 inc     (hl)
                 ret
@@ -1606,6 +1637,8 @@ count_visible:
                 ld      hl,attr_flags
                 xor     a
 .lp:            bit     ATTR_F_PAUSE,(hl)
+                jr      nz,.skip
+                bit     ATTR_F_SPEED,(hl)
                 jr      nz,.skip
                 inc     a
 .skip:          inc     hl
@@ -2000,13 +2033,27 @@ fx_dsp_typewriter_r:
                 ld      hl,attr_flags
                 add     hl,bc
                 bit     ATTR_F_PAUSE,(hl)
-                jr      z,.twr_vis
+                jr      z,.twr_chk_spd
 
                 ; Pause
                 ld      hl,text_buf
                 add     hl,bc
                 ld      a,(hl)
                 ld      (state.pause_count),a
+                ld      hl,state.fx_pos
+                inc     (hl)
+                ret
+
+.twr_chk_spd:  ; Speed change marker?
+                bit     ATTR_F_SPEED,(hl)
+                jr      z,.twr_vis
+
+                ; Apply new speed and advance
+                ld      hl,text_buf
+                add     hl,bc
+                ld      a,(hl)
+                ld      (state.speed),a
+                ld      (state.step_timer),a
                 ld      hl,state.fx_pos
                 inc     (hl)
                 ret
@@ -2182,16 +2229,20 @@ example_stream:
                 db      "WAVE 1"
                 db      PAGE_END
 
-                ; Page 4: Typewriter reveal with pause
+                ; Page 4: Typewriter with acceleration
                 db      PAGE_START
                 db      TRANS_NONE
                 db      DISP_TYPEWRITER
                 db      TRANS_FADE
-                db      4
-                db      01h, 2Ch        ; 300 ticks = 6 sec
+                db      8               ; initial speed: slow
+                db      01h, 90h        ; 400 ticks = 8 sec
                 db      INL_ALIGN_C
-                db      "GET READY"
+                db      INL_SPEED, INL_PARAM_BASE + 7
+                db      "GET "
+                db      INL_SPEED, INL_PARAM_BASE + 1
+                db      "READY"
                 db      INL_PAUSE, INL_PARAM_BASE + 10
+                db      INL_SPEED, INL_PARAM_BASE + 3
                 db      "..."
                 db      PAGE_END
 
