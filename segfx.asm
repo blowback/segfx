@@ -62,6 +62,7 @@ INL_ALIGN_L     equ     87h
 INL_WAVE_TBL    equ     88h             ; next byte (INL_PARAM_BASE+n) selects wave table
 INL_GLYPH       equ     89h             ; next 2 bytes = raw segment bitmask, rendered as one char
 INL_CHARDEF     equ     8Ah             ; next byte = char code (A0-FE), then 2 bytes = segment pattern
+INL_WAVE_DIR    equ     8Bh             ; next byte: 90h=L→R, 91h=R→L, 92h=bounce
 
 ; Custom character table
 MAX_CUSTOM_CHARS equ    16              ; max custom glyph definitions per page
@@ -105,6 +106,7 @@ marquee_hold    dw      0               ; ticks remaining in marquee hold phase
 lfsr            db      0ACh            ; 8-bit LFSR for sparkle (non-zero seed)
 dirty           db      0               ; non-zero = display buffers need pushing to hw
 wave_tbl        db      0               ; wave table index (0=sine, 1=glint, ...)
+wave_dir        db      0               ; wave direction: 0=L→R, 1=R→L, 2=bounce
 glyph_code      db      0FEh            ; next auto-assigned code for INL_GLYPH (counts down from 0xFE)
 page_index      db      0               ; current page number (0-based)
 callback        dw      0               ; user callback address (0 = disabled)
@@ -626,11 +628,11 @@ segfx_tick:
 
 .entry:         call    fx_trans_step
                 jr      nc,.mark_dirty  ; CF clear = still running
-                ; Entry complete → display
+                ; Entry complete → display phase
+                ; Don't touch the display buffers — the last fade step already
+                ; left them in the correct final state. Just switch state.
                 ld      a,2
                 ld      (state.page_state),a
-                call    render_full
-                call    set_full_bright
                 jr      .mark_dirty
 
 .display:       call    fx_display_step
@@ -766,9 +768,9 @@ page_load:
                 ld      (state.speed),a
                 ld      (state.step_timer),a
                 inc     hl
-                ld      d,(hl)          ; dwell_hi
-                inc     hl
                 ld      e,(hl)          ; dwell_lo
+                inc     hl
+                ld      d,(hl)          ; dwell_hi
                 inc     hl
                 ld      (state.tick_count),de
 
@@ -783,6 +785,7 @@ page_load:
                 ld      (state.text_offset),a
                 ld      (state.marquee_state),a
                 ld      (state.wave_tbl),a
+                ld      (state.wave_dir),a
                 ld      (custom_count),a
                 ld      a,0FEh
                 ld      (state.glyph_code),a
@@ -943,6 +946,8 @@ decode_content:
                 jp      z,.i_glyph
                 cp      INL_CHARDEF
                 jp      z,.i_chardef
+                cp      INL_WAVE_DIR
+                jp      z,.i_wdir
                 inc     hl              ; unknown → skip
                 jp      .lp
 
@@ -1019,6 +1024,13 @@ decode_content:
                 ld      a,(hl)
                 sub     INL_PARAM_BASE  ; 0..15
                 ld      (state.wave_tbl),a
+                inc     hl
+                jp      .lp
+
+.i_wdir:        inc     hl
+                ld      a,(hl)
+                sub     INL_PARAM_BASE  ; 0=L→R, 1=R→L, 2=bounce
+                ld      (state.wave_dir),a
                 inc     hl
                 jp      .lp
 
@@ -1465,15 +1477,14 @@ fx_trans_step:
                 scf                     ; unknown → done
                 ret
 
-; --- FADE IN: 16 steps, brightness ≈ step × 17 ---
+; --- FADE IN: 15 steps, brightness = step × 17 (17, 34, ... 255) ---
 fx_fade_in:
-;               call    render_full  ; removed: pre-rendered in page_load
                 ld      a,(state.fx_pos)
-                cp      16
+                cp      15
                 jr      nc,.done
                 inc     a
                 ld      (state.fx_pos),a
-                ; brightness = step × 16 + step = step × 17
+                ; brightness = step × 17 (step 1..15 → 17..255)
                 ld      b,a
                 sla     a
                 sla     a
@@ -1481,7 +1492,7 @@ fx_fade_in:
                 sla     a               ; ×16
                 add     a,b             ; ×17
                 jr      nc,.ok
-                ld      a,0FFh
+                ld      a,0FFh          ; clamp (shouldn't happen for steps 1..15)
 .ok:            ld      hl,disp_bright
                 ld      b,DISP_COLS
 .lp:            ld      (hl),a
@@ -1699,13 +1710,12 @@ fx_trans_exit_step:
                 scf
                 ret
 
-; --- FADE OUT ---
+; --- FADE OUT: 16 steps, brightness = (15-pos) × 17 (255, 238, ... 17, 0) ---
 fx_fade_out:
                 ld      a,(state.fx_pos)
                 cp      16
                 jr      nc,.done
-                ; brightness = (15 - pos + 1) × 16 + (15 - pos + 1) - 1
-                ; Simpler: (16 - (pos+1)) × 17 ... let's just do (15-pos)*17
+                ; brightness = (15 - pos) × 17 (step 0..15 → 255..0)
                 ld      b,a
                 ld      a,15
                 sub     b               ; 15..0
@@ -1715,9 +1725,7 @@ fx_fade_out:
                 sla     a
                 sla     a               ; ×16
                 add     a,c             ; ×17
-                jr      nc,.ok
-                ld      a,0FFh
-.ok:            ld      hl,disp_bright
+                ld      hl,disp_bright
                 ld      b,DISP_COLS
 .lp:            ld      (hl),a
                 inc     hl
@@ -2591,55 +2599,31 @@ fx_dsp_marquee_r:
                 jr      z,.mqr_hold
                 jr      .mqr_out
 
-.mqr_in:        ; Text slides in from left: starts at column -(vis_len), moving right
-                ; render_col = fx_pos - vis_len
+.mqr_in:        ; Text slides in from left: starts off-screen, moving right
+                ; Start column = fx_pos - vis_len (negative while entering)
+                ; mql_render_at handles negative columns: skips chars until on-screen
                 ld      a,(state.fx_pos)
-                ld      b,a
-                push    bc
+                ld      d,a             ; D = fx_pos
+                push    de
                 call    calc_start_col
-                pop     bc
-                ld      c,a             ; C = target
-                ; Current start = fx_pos - vis_len (may be negative → off left)
-                ld      a,b
-                ld      d,a
+                pop     de
+                ld      e,a             ; E = target (centered column)
+                ; Compute start_col = fx_pos - vis_len
                 ld      a,(state.vis_len)
-                ld      e,a
-                ld      a,d
-                sub     e               ; A = fx_pos - vis_len (render start, possibly underflowed)
-                ; If fx_pos - vis_len >= target, we're centered
-                ; But A might have underflowed. Check: if fx_pos < vis_len, not there yet
+                ld      c,a             ; C = vis_len
                 ld      a,d             ; fx_pos
-                cp      e               ; vis_len
-                jr      c,.mqr_nocheck  ; fx_pos < vis_len, definitely not centered
-                ; fx_pos >= vis_len: check if start >= target
-                ld      a,d
-                sub     e
-                cp      c
-                jr      nc,.mqr_centered
-.mqr_nocheck:
-                ; Render: place text starting at max(0, fx_pos - vis_len)
-                ld      a,d
-                cp      e
-                jr      nc,.mqr_pos
-                xor     a               ; start at 0, but skip leading chars that are off-screen
-                ; Actually for simplicity, use mql_render_at which handles column naturally
-.mqr_pos:       ; For the "sliding in from left" we need to handle partial visibility
-                ; Easier: render at column 0 with an offset into the text
-                ; Let's reuse the scroll approach: text_offset = vis_len + DISP_COLS - fx_pos
-                ; This is getting complex. Simpler: just use mql_render_at with the calculated column
-                ld      a,d
-                sub     e               ; underflows if fx_pos < vis_len
-                jr      nc,.mqr_have_col
-                ; Negative start: some chars off left edge. Still call render_at with col=0
-                ; but skip the first (vis_len - fx_pos) visible chars... 
-                ; This is tricky. Let's use a different approach for marquee_r.
-                ; Use render_scrolled with a computed offset.
-                ; offset such that text appears at the right position.
-                ; text_offset = wrap_point - (DISP_COLS - fx_pos + vis_len) ... 
-                ; Actually let's just accept that partial left-entry won't look perfect
-                ; and start rendering from column 0 once any part is visible.
-                xor     a
-.mqr_have_col:
+                sub     c               ; A = fx_pos - vis_len (may underflow, that's fine)
+                ld      b,a             ; B = start_col for render
+                ; Check if centered: need fx_pos >= vis_len AND (fx_pos - vis_len) >= target
+                ld      a,d             ; fx_pos
+                cp      c               ; vis_len
+                jr      c,.mqr_render   ; fx_pos < vis_len: still entering, not centered
+                ; fx_pos >= vis_len: start_col is valid (non-negative)
+                ld      a,b             ; start_col
+                cp      e               ; target
+                jr      nc,.mqr_centered ; start_col >= target: reached center
+.mqr_render:
+                ld      a,b             ; start column (underflowed = negative, handled by render_at)
                 call    fx_dsp_marquee_l.mql_render_at
                 ld      hl,state.fx_pos
                 inc     (hl)
@@ -2897,7 +2881,40 @@ fx_dsp_wave:
                 inc     hl
                 inc     c
                 djnz    .lp
+                ; Update fx_pos based on wave direction
+                ld      a,(state.wave_dir)
+                or      a
+                jr      z,.dir_ltr      ; 0 = L→R
+                dec     a
+                jr      z,.dir_rtl      ; 1 = R→L
+                ; 2 = bounce — use fx_sub as sub-direction (0=L→R, 1=R→L)
+                ld      a,(state.fx_sub)
+                or      a
+                jr      nz,.dir_rtl_b
+                ; bounce L→R: decrement
                 ld      hl,state.fx_pos
+                dec     (hl)
+                ld      a,(hl)
+                and     1Fh
+                ret     nz
+                ; wrapped — flip to R→L
+                ld      a,1
+                ld      (state.fx_sub),a
+                ret
+.dir_rtl_b:     ; bounce R→L: increment
+                ld      hl,state.fx_pos
+                inc     (hl)
+                ld      a,(hl)
+                and     1Fh
+                ret     nz
+                ; wrapped — flip to L→R
+                xor     a
+                ld      (state.fx_sub),a
+                ret
+.dir_ltr:       ld      hl,state.fx_pos
+                dec     (hl)
+                ret
+.dir_rtl:       ld      hl,state.fx_pos
                 inc     (hl)
                 ret
 
@@ -2913,7 +2930,7 @@ example_stream:
                 db      DISP_BREATHE
                 db      TRANS_FADE
                 db      2
-                db      01h, 2Ch        ; 300 ticks = 6 sec
+                dw      300             ; 300 ticks = 6 sec
                 db      "  SPACE INVADERS 3D   "
                 db      PAGE_END
 
@@ -2924,7 +2941,7 @@ example_stream:
                 db      DISP_SCROLL_L
                 db      TRANS_NONE
                 db      2               ; initial speed: fast
-                db      03h, 20h        ; 800 ticks = 16 sec
+                dw      800             ; 800 ticks = 16 sec
                 db      INL_ALIGN_C
                 db      "ARROWS TO MOVE"
                 db      INL_SPEED, INL_PARAM_BASE + 4
@@ -2947,7 +2964,7 @@ example_stream:
                 db      DISP_MARQUEE_L
                 db      TRANS_NONE
                 db      2
-                db      00h, 64h        ; 100 ticks = 2 sec hold
+                dw      100             ; 100 ticks = 2 sec hold
                 db      INL_ALIGN_C
                 db      "WAVE 1"
                 db      PAGE_END
@@ -2958,7 +2975,7 @@ example_stream:
                 db      DISP_TYPEWRITER
                 db      TRANS_FADE
                 db      8               ; initial speed: slow
-                db      01h, 90h        ; 400 ticks = 8 sec
+                dw      400             ; 400 ticks = 8 sec
                 db      INL_ALIGN_C
                 db      INL_SPEED, INL_PARAM_BASE + 7
                 db      "GET "
@@ -2975,7 +2992,7 @@ example_stream:
                 db      DISP_SPARKLE
                 db      TRANS_FADE_WP_R
                 db      2
-                db      01h, 0F4h       ; 500 ticks = 10 sec
+                dw      500             ; 500 ticks = 10 sec
                 db      INL_ALIGN_C
                 db      "HIGH SCORE  12500"
                 db      PAGE_END
@@ -2986,8 +3003,9 @@ example_stream:
                 db      DISP_WAVE
                 db      TRANS_VFADE_U
                 db      1               ; fast speed for smooth glint
-                db      01h, 2Ch        ; 300 ticks = 6 sec
+                dw      300             ; 300 ticks = 6 sec
                 db      INL_WAVE_TBL, INL_PARAM_BASE + 1   ; table 1 = glint
+                db      INL_WAVE_DIR, INL_PARAM_BASE + 2   ; bounce
                 db      "    ROUND COMPLETE!     "
                 db      PAGE_END
 
@@ -2997,7 +3015,7 @@ example_stream:
                 db      DISP_TWRT_R
                 db      TRANS_WIPE_EDGE
                 db      3
-                db      01h, 2Ch        ; 300 ticks = 6 sec
+                dw      300             ; 300 ticks = 6 sec
                 db      INL_ALIGN_C
                 db      "GAME OVER"
                 db      PAGE_END
@@ -3008,7 +3026,7 @@ example_stream:
                 db      DISP_BOUNCE
                 db      TRANS_WIPE_R
                 db      4               ; initial speed: moderate
-                db      03h, 0E8h       ; 1000 ticks = 20 sec
+                dw      1000            ; 1000 ticks = 20 sec
                 db      "PROGRAMMED BY"
                 db      INL_SPEED, INL_PARAM_BASE + 1
                 db      " TEAM ALPHA"
@@ -3022,7 +3040,7 @@ example_stream:
                 db      DISP_STATIC
                 db      TRANS_WIPE_EDGE
                 db      6
-                db      02h, 58h        ; 600 ticks = 12 sec
+                dw      600             ; 600 ticks = 12 sec
                 db      INL_ALIGN_C
                 db      "INSERT "
                 db      INL_FLASH
@@ -3039,7 +3057,7 @@ example_stream:
                 db      DISP_STATIC
                 db      TRANS_FADE
                 db      3
-                db      02h, 58h        ; 600 ticks = 12 sec
+                dw      600             ; 600 ticks = 12 sec
                 db      INL_CHARDEF, 0A0h, 001h, 007h  ; heart = 0x0701 (lo, hi)
                 db      INL_ALIGN_C
                 db      "I "

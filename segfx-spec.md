@@ -64,7 +64,7 @@ The engine is driven by `segfx_tick`, called at **50 Hz** from a BIOS interrupt 
 - Speed 2 = step every 40ms (25 steps/sec)
 - Speed 5 = step every 100ms (10 steps/sec)
 
-**Dwell** is a 16-bit value in ticks (little-endian in stream). 50 ticks = 1 second. Max ~21 minutes.
+**Dwell** is a 16-bit value in ticks (big-endian in stream). 50 ticks = 1 second. Max ~21 minutes.
 
 ### Main Loop Integration
 
@@ -99,8 +99,8 @@ main_loop:
 <display_fx>    ; Display effect code (1 byte)
 <exit_fx>       ; Exit transition code (1 byte)
 <speed>         ; Ticks per animation step (1 byte, 1–16 typical)
-<dwell_lo>      ; Dwell time low byte
 <dwell_hi>      ; Dwell time high byte
+<dwell_lo>      ; Dwell time low byte
 [CONTENT...]    ; Text and inline codes
 0x02            ; PAGE_END marker
 ```
@@ -127,7 +127,7 @@ The same code is used for both entry and exit. As entry, the transition reveals 
 | Code | Name | Steps | Description |
 |------|------|-------|-------------|
 | `0x00` | `TRANS_NONE` | 0 | Instant appear/disappear. No transition animation. |
-| `0x01` | `TRANS_FADE` | 15 in / 16 out | All 24 columns fade brightness up (in) or down (out) simultaneously. Smooth ramp in steps of 17. |
+| `0x01` | `TRANS_FADE` | 16 | All 24 columns fade brightness up (in) or down (out) simultaneously. Smooth 16-step ramp. |
 | `0x03` | `TRANS_WIPE_L` | 24 | Columns reveal/conceal one at a time, left to right. |
 | `0x04` | `TRANS_WIPE_R` | 24 | Columns reveal/conceal one at a time, right to left. |
 | `0x05` | `TRANS_WIPE_CTR` | 12 | Columns reveal/conceal from centre outward, two at a time. |
@@ -172,7 +172,7 @@ These run continuously during the dwell period between entry and exit transition
 | `0x09` | `DISP_BOUNCE` | Text pans left then right, reversing at edges. | `INL_SPEED` |
 | `0x0A` | `DISP_FLASH_ALT` | Alternating characters flash (even on / odd off, then swap). | `INL_ALIGN_*` |
 | `0x0B` | `DISP_SPARKLE` | Random characters briefly dim and restore (twinkling). | `INL_ALIGN_*` |
-| `0x0C` | `DISP_WAVE` | Brightness wave travels across display. Table selectable. | `INL_WAVE_TBL`, `INL_ALIGN_*` |
+| `0x0C` | `DISP_WAVE` | Brightness wave travels across display. Table and direction selectable. | `INL_WAVE_TBL`, `INL_WAVE_DIR`, `INL_ALIGN_*` |
 
 #### Notes on Specific Effects
 
@@ -189,7 +189,7 @@ Characters are revealed one per step. `INL_PAUSE` inserts a delay (in steps). `I
 Requires text longer than 24 characters. Renders at the current offset, then adjusts for the next step — both endpoints (offset 0 and max) are displayed. `INL_SPEED` within the text changes pan speed as different sections are shown.
 
 **Wave (DISP_WAVE):**
-Uses a 32-entry brightness lookup table, selectable via `INL_WAVE_TBL`. Phase advances one position per step. At speed 1, a full wave cycle = 32 × 20ms = 640ms.
+Uses a 32-entry brightness lookup table, selectable via `INL_WAVE_TBL`. Phase advances one position per step. At speed 1, a full wave cycle = 32 × 20ms = 640ms. Direction is controlled by `INL_WAVE_DIR`: left-to-right (default), right-to-left, or bounce (alternates direction every 32 steps).
 
 ### 3.3 Inline Effect Codes
 
@@ -208,6 +208,7 @@ Inline codes appear within page content. They modify rendering state but produce
 | `0x88` | `INL_WAVE_TBL` | `0x90–0x9F` | Select wave table index for DISP_WAVE. |
 | `0x89` | `INL_GLYPH` | 2 bytes: seg_lo, seg_hi | Insert a one-off custom glyph. Rendered as a single visible character. |
 | `0x8A` | `INL_CHARDEF` | 3 bytes: code, seg_lo, seg_hi | Define a reusable custom character in the 0xA0–0xFE range. |
+| `0x8B` | `INL_WAVE_DIR` | `0x90–0x92` | Set wave direction: 0=left-to-right, 1=right-to-left, 2=bounce. |
 
 #### Important Usage Notes
 
@@ -328,6 +329,7 @@ actual_value = byte - 0x90
 | `INL_PAUSE` | duration in steps | 0 – 15 |
 | `INL_SPEED` | speed = value + 1 ticks/step | 1 – 16 |
 | `INL_WAVE_TBL` | table index | 0 – 15 |
+| `INL_WAVE_DIR` | direction: 0=L→R, 1=R→L, 2=bounce | 0 – 2 |
 
 ---
 
@@ -528,8 +530,8 @@ Each sub-page is a self-contained block:
 <col_start>         ; First column (0–23)
 <col_count>         ; Width in columns (1–24)
 <display_fx>        ; Display effect code (same codes as §3.2)
-<dwell_lo>          ; Sub-page dwell low byte
 <dwell_hi>          ; Sub-page dwell high byte
+<dwell_lo>          ; Sub-page dwell low byte
 [CONTENT...]        ; Text and inline codes
 0x02                ; SUB_PAGE_END (reuses PAGE_END marker)
 ```
@@ -551,7 +553,7 @@ Inline codes within a sub-page's content work as normal — `INL_BRIGHT`, `INL_F
 00                      ; col_start: 0
 0A                      ; col_count: 10
 00                      ; DISP_STATIC
-20 03                   ; dwell: 800 ticks (16 sec) [little-endian]
+03 20                   ; dwell: 800 ticks (16 sec)
 "CONTROLS: "
 02                      ; SUB_PAGE_END
 
@@ -559,7 +561,7 @@ Inline codes within a sub-page's content work as normal — `INL_BRIGHT`, `INL_F
 0A                      ; col_start: 10
 0E                      ; col_count: 14
 03                      ; DISP_SCROLL_L
-20 03                   ; dwell: 800 ticks (16 sec) [little-endian]
+03 20                   ; dwell: 800 ticks (16 sec)
 "<, > MOVE --- O FIRE --- P PAUSE --- H HELP"
 02                      ; SUB_PAGE_END
 
