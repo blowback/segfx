@@ -2,6 +2,10 @@
 
 ## Protocol Specification v1.0
 
+
+https://github.com/user-attachments/assets/4093a997-58f3-42f5-ad0f-ccc998fab88e
+
+
 **Target:** Z80 microcomputer at 8 MHz with 24× 14-segment character displays
 **Display:** Single row, 24 characters, 8-bit (256-level) per-character brightness via hardware PWM
 **Interface:** BIOS calls for segment patterns and brightness
